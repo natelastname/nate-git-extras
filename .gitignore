@@ -1,0 +1,6 @@
+# Ignore Goose and agent shell directories
+.goose/
+.agent-shell/
+\n.goose
+*.gz
+site/

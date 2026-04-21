@@ -1,0 +1,57 @@
+version: "1.0.0"
+title: "Repository Status Report"
+author:
+  contact: "nate"
+description: "Report on the current state of the repository, including branch status, unpushed commits, and other key details."
+extensions:
+  - type: builtin
+    name: developer
+    display_name: Developer
+    timeout: 300
+    bundled: true
+instructions: |
+  # Procedure
+
+  ## 1. Identify the Current Branch
+  Display the current branch:
+  ```sh
+  git branch --show-current
+  ```
+
+  ## 2. Count Unpushed Commits
+  Fetch updates and count unpushed commits:
+  ```sh
+  git fetch
+  git log --oneline HEAD ^forgejo/<main>
+  ```
+
+  ## 3. Check for Uncommitted Changes
+  Display working directory changes:
+  ```sh
+  git status --short
+  ```
+
+  ## 4. Remote Information
+  Verify and list remote details:
+  ```sh
+  git remote -v
+  git remote show forgejo
+  ```
+
+  ## 5. Compile Other Relevant Data
+  - Staged changes summary using:
+  ```sh
+  git diff --cached --stat
+  ```
+
+  ## Success Criteria
+  - Provide clear summary of branch status and repository state before starting tasks.
+
+  ## Helpful Commands
+  ```sh
+  git branch --show-current
+  git log --oneline HEAD ^forgejo/main
+  git status --short
+  git remote -v
+  git diff --cached --stat
+  ```

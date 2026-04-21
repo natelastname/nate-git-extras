@@ -1,0 +1,73 @@
+version: "1.0.0"
+title: "Open Pull Request with Summary and Reversion"
+author:
+  contact: "nate"
+description: "Summarize local changes, target unpushed commits, and open a PR on Forgejo merging local changes on a feature branch to `main`."
+extensions:
+  - type: builtin
+    name: developer
+    display_name: Developer
+    timeout: 300
+    bundled: true
+instructions: |
+  # Procedure
+
+  ## 0. Login
+
+  ```sh
+  tea login default forgejo-local
+  ```
+
+  ## 1. Check for Local Changes
+
+  Use stash to preserve local changes temporarily:
+  ```sh
+  git stash -u
+  ```
+
+  ## 2. Identify Relevant Commits
+
+  List all commits on the current branch not on the remote:
+  ```sh
+  git fetch
+  git log forgejo/main..HEAD --oneline
+  ```
+
+  If no new commits exist, restore the stash and exit.
+
+  ## 3. Push Relevant Branch Changes
+
+  Push relevant commits to the remote:
+  ```sh
+  git push -u forgejo <current-feature-branch>
+  ```
+
+  ## 4. Create a Pull Request
+
+  Create a PR from the local changes:
+  ```sh
+  tea pr create --head <current-feature-branch> --base main
+  ```
+
+  ## 5. Revert to Original State
+
+  Restore any uncommitted changes:
+  ```sh
+  git stash pop
+  ```
+
+  ## Success Criteria
+
+  - Only target unpushed commits.
+  - Successfully create and open PR.
+  - Restore local repo state after completion.
+
+  ## Helpful Commands
+  ```sh
+  git stash -u
+  git fetch
+  git log forgejo/main..HEAD --oneline
+  git push -u forgejo <current-feature-branch>
+  tea pr create --head <current-feature-branch> --base main
+  git stash pop
+  ```

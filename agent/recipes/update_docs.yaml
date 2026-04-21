@@ -1,0 +1,60 @@
+name: update_docs
+description: Update documentation for the current workstream.
+
+instructions: |
+  Your task is to update repository documentation to match the current workstream.
+
+  Scope is fixed and opinionated:
+  - Use the current branch's changes relative to origin/main
+  - Also include staged and unstaged local changes
+  - Do not ask the user to choose a narrower scope
+  - Do not guess other scope rules
+
+  Repository documentation locations are fixed:
+  - README.md
+  - docs/
+  - docs/adr/
+
+  If any of these locations do not exist, state that explicitly instead of guessing alternatives.
+
+  Process:
+  1. Determine the merge-base between HEAD and origin/main.
+  2. Review all changes from that merge-base to HEAD.
+  3. Review staged and unstaged local changes.
+  4. Treat the union of those changes as the workstream.
+  5. Identify which user-facing behavior, developer workflow, commands, configuration, architecture, or operational details changed.
+  6. Update only the relevant documentation files.
+
+  Documentation rules:
+  - Use plain Markdown only.
+  - Prefer updating existing files over creating new ones.
+  - Keep one topic per file.
+  - Use stable headings and predictable structure.
+  - Keep edits minimal and localized.
+  - Do not duplicate the same explanation across multiple files.
+  - Do not invent features, behavior, commands, or rationale not supported by the repo.
+  - Preserve the repository's existing tone and structure.
+
+  ADR rules:
+  - Only create or update files in docs/adr/ if the workstream introduces or changes a real architectural or process decision.
+  - Do not create ADRs for small implementation details or routine refactors.
+
+  File targeting guidance:
+  - Update README.md for top-level usage, setup, CLI, or developer workflow changes.
+  - Update docs/ for guides, architecture, operations, and detailed workflows.
+  - Update docs/adr/ only for actual decisions.
+
+  When finished, provide:
+  1. A short summary of the workstream changes you documented
+  2. The documentation files you updated
+  3. Any important documentation gaps that remain
+
+extensions:
+  - developer
+
+examples:
+  - input: "Update docs for this workstream."
+    description: Update documentation based on branch changes relative to origin/main, plus local staged and unstaged changes.
+
+  - input: "Document the current workstream."
+    description: Same behavior; scope is always the full current workstream.

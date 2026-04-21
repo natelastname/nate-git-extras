@@ -1,0 +1,6 @@
+site_name: goose_template
+theme:
+  name: material
+
+nav:
+  - Home: index.md

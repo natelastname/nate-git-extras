@@ -1,0 +1,65 @@
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[project]
+name = "goose_template"
+version = "0.1.0"
+description = "A python module"
+readme = "README.md"
+authors = [
+  { name = "Nathan Nichols", email = "communications@resultsmotivated.com" },
+]
+
+[project.scripts]
+goose_template = "goose_template.cli:cli"
+
+[tool.poetry]
+version = "2.1.1"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.14.1"
+loguru = "^0.7.3"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8"
+basedpyright = "^1.31.5"
+ruff = "^0.13.2"
+mkdocs = "<2.0"
+mkdocs-material = "^9.7.2"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+    "ignore:.*unclosed.*:ResourceWarning",
+]
+
+[tool.pyright]
+typeCheckingMode = "off"
+reportMissingParameterType = "none"
+reportMissingTypeArgument = "none"
+reportUnknownParameterType = "none"
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUntypedFunctionDecorator = "none"
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+  "F",  # real errors
+  "I",  # import sorting
+]
+fixable = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/**/__init__.py" = ["F401"]
+"tests/*" = ["I001"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
