@@ -8,9 +8,13 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
+
+# requires pyyaml
+import yaml
 
 
 def env(name: str, default: str) -> str:
@@ -427,38 +431,58 @@ def configure_tea_login(cfg: Config) -> None:
     if not token:
         die(f"Missing FORGEJO_AGENT_TOKEN in {cfg.secrets_env_path}")
 
-    login_ls = run(
-        ["tea", "login", "ls"],
-        check=False,
-        capture_output=True,
+    tea_dir = Path.home() / ".tea"
+    tea_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(tea_dir, 0o700)
+
+    tea_config_path = tea_dir / "tea.yml"
+
+    if tea_config_path.exists():
+        with tea_config_path.open("r") as f:
+            data = yaml.safe_load(f) or {}
+    else:
+        data = {}
+
+    logins = data.get("logins", [])
+    if not isinstance(logins, list):
+        logins = []
+
+    logins = [login for login in logins if login.get("name") != cfg.forgejo_ssh_host_alias]
+
+    for login in logins:
+        login["default"] = False
+
+    logins.append(
+        {
+            "name": cfg.forgejo_ssh_host_alias,
+            "url": cfg.forgejo_url,
+            "token": token,
+            "default": True,
+            "ssh_host": f"{cfg.forgejo_ssh_hostname}:{cfg.forgejo_ssh_port}",
+            "ssh_key": "",
+            "insecure": False,
+            "ssh_certificate_principal": "",
+            "ssh_agent": False,
+            "ssh_key_agent_pub": "",
+            "version_check": True,
+            "user": cfg.agent_username,
+            "created": int(time.time()),
+        }
     )
-    combined = (login_ls.stdout or "") + "\n" + (login_ls.stderr or "")
-    if cfg.forgejo_url in combined or cfg.forgejo_ssh_host_alias in combined:
-        print(f"tea login for {cfg.forgejo_url} already exists")
-        return
 
-    print("Configuring tea login")
-    result = run(
-        [
-            "tea",
-            "login",
-            "add",
-            "--name",
-            cfg.forgejo_ssh_host_alias,
-            "--url",
-            cfg.forgejo_url,
-            "--token",
-            token,
-        ],
-        check=False,
-        capture_output=True,
-    )
+    data["logins"] = logins
+    prefs = data.get("preferences", {})
+    if not isinstance(prefs, dict):
+        prefs = {}
+    prefs.setdefault("editor", False)
+    prefs.setdefault("flag_defaults", {"remote": ""})
+    data["preferences"] = prefs
 
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        die(f"Failed to configure tea login: {detail}")
+    with tea_config_path.open("w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
 
-    print("Configured tea login")
+    os.chmod(tea_config_path, 0o600)
+    print(f"Wrote tea login config: {tea_config_path}")
 
 
 def write_project_profile(cfg: Config, repo_root: Path) -> None:
@@ -812,44 +836,56 @@ def remove_local_credentials(cfg: Config) -> None:
 
 
 def remove_tea_login(cfg: Config) -> None:
-    if shutil.which("tea") is None:
-        print("tea not installed; skipping tea login removal")
+    tea_config_path = Path.home() / ".tea" / "tea.yml"
+
+    if not tea_config_path.exists():
+        print(f"tea config not present: {tea_config_path}")
         return
 
-    result = run(
-        ["tea", "login", "ls"],
-        check=False,
-        capture_output=True,
-    )
-    combined = (result.stdout or "") + "\n" + (result.stderr or "")
-    if cfg.forgejo_ssh_host_alias not in combined and cfg.forgejo_url not in combined:
+    try:
+        with tea_config_path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except Exception as exc:
+        print(f"Could not read tea config {tea_config_path}: {exc}")
+        print("Continuing reset without failing.")
+        return
+
+    logins = data.get("logins", [])
+    if not isinstance(logins, list):
+        print(f"tea config has unexpected 'logins' format: {tea_config_path}")
+        print("Continuing reset without failing.")
+        return
+
+    original_count = len(logins)
+    new_logins = [
+        login
+        for login in logins
+        if not (
+            isinstance(login, dict)
+            and (
+                login.get("name") == cfg.forgejo_ssh_host_alias
+                or login.get("url") == cfg.forgejo_url
+            )
+        )
+    ]
+
+    if len(new_logins) == original_count:
         print(f"tea login not present: {cfg.forgejo_ssh_host_alias}")
         return
 
-    print(f"Attempting to remove tea login: {cfg.forgejo_ssh_host_alias}")
+    data["logins"] = new_logins
 
-    candidate_commands = [
-        ["tea", "login", "remove", cfg.forgejo_ssh_host_alias],
-        ["tea", "login", "delete", cfg.forgejo_ssh_host_alias],
-        ["tea", "login", "rm", cfg.forgejo_ssh_host_alias],
-    ]
+    try:
+        tea_config_path.parent.mkdir(parents=True, exist_ok=True)
+        with tea_config_path.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, sort_keys=False)
+        os.chmod(tea_config_path, 0o600)
+    except Exception as exc:
+        print(f"Could not write updated tea config {tea_config_path}: {exc}")
+        print("Continuing reset without failing.")
+        return
 
-    for cmd in candidate_commands:
-        result = run(cmd, check=False, capture_output=True)
-        if result.returncode == 0:
-            print(f"Removed tea login using: {' '.join(cmd[:3])}")
-            return
-
-        detail = ((result.stderr or "") + "\n" + (result.stdout or "")).strip()
-        if "No help topic" in detail or "unknown command" in detail.lower():
-            continue
-
-    print(
-        "Could not remove tea login automatically; "
-        "your tea version does not support the expected subcommand. "
-        "Continuing reset without failing."
-    )
-
+    print(f"Removed tea login from {tea_config_path}: {cfg.forgejo_ssh_host_alias}")
 
 def remove_ssh_alias(cfg: Config) -> None:
     ssh_config = Path.home() / ".ssh" / "config"
@@ -1106,7 +1142,6 @@ def reset(
 ) -> int:
     need_cmd("docker")
     need_cmd("git")
-
     delete_forgejo_user(cfg)
     remove_local_credentials(cfg)
     remove_tea_login(cfg)
@@ -1193,6 +1228,7 @@ def main() -> int:
         )
     if args.command == "doctor":
         return doctor(cfg)
+
 
     parser.error(f"Unknown command: {args.command}")
     return 2
