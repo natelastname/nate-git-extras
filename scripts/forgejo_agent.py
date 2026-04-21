@@ -32,7 +32,7 @@ class Config:
     token_name: str
     token_scopes: str
     git_remote_name: str
-    git_main_branch: str
+    git_master_branch: str
     initial_commit_message: str
     profile_name: str
     project_profile_rel_path: str
@@ -75,7 +75,7 @@ class Config:
             token_name=env("TOKEN_NAME", "local-agent"),
             token_scopes=env("TOKEN_SCOPES", "write:repository,write:user"),
             git_remote_name=env("GIT_REMOTE_NAME", "forgejo"),
-            git_main_branch=env("GIT_MAIN_BRANCH", "main"),
+            git_master_branch=env("GIT_MASTER_BRANCH", "master"),
             initial_commit_message=env("INITIAL_COMMIT_MESSAGE", "Initial commit"),
             profile_name=env("PROFILE_NAME", "local-forgejo-agent"),
             project_profile_rel_path=env(
@@ -469,7 +469,7 @@ def write_project_profile(cfg: Config, repo_root: Path) -> None:
 forgejo_url: {cfg.forgejo_url}
 forgejo_user: {cfg.agent_username}
 git_remote_name: {cfg.git_remote_name}
-git_main_branch: {cfg.git_main_branch}
+git_master_branch: {cfg.git_master_branch}
 ssh_host_alias: {cfg.forgejo_ssh_host_alias}
 ssh_hostname: {cfg.forgejo_ssh_hostname}
 ssh_port: {cfg.forgejo_ssh_port}
@@ -567,24 +567,24 @@ def ensure_git_repo_initialized(cfg: Config) -> Path:
             return resolved_root
 
     print(f"Initializing git repo in {repo_root}")
-    run(["git", "init", "-b", cfg.git_main_branch, str(repo_root)])
+    run(["git", "init", "-b", cfg.git_master_branch, str(repo_root)])
     return repo_root
 
 
 def ensure_main_branch(cfg: Config, repo_root: Path) -> None:
     current_branch = get_current_branch(repo_root)
 
-    if current_branch == cfg.git_main_branch:
-        print(f"Current branch already {cfg.git_main_branch}")
+    if current_branch == cfg.git_master_branch:
+        print(f"Current branch already {cfg.git_master_branch}")
         return
 
     if has_commits(repo_root):
-        run(["git", "branch", "-M", cfg.git_main_branch], cwd=repo_root)
-        print(f"Renamed current branch to {cfg.git_main_branch}")
+        run(["git", "branch", "-M", cfg.git_master_branch], cwd=repo_root)
+        print(f"Renamed current branch to {cfg.git_master_branch}")
         return
 
-    run(["git", "symbolic-ref", "HEAD", f"refs/heads/{cfg.git_main_branch}"], cwd=repo_root)
-    print(f"Set initial branch to {cfg.git_main_branch}")
+    run(["git", "symbolic-ref", "HEAD", f"refs/heads/{cfg.git_master_branch}"], cwd=repo_root)
+    print(f"Set initial branch to {cfg.git_master_branch}")
 
 
 def ensure_initial_commit(cfg: Config, repo_root: Path) -> None:
@@ -701,7 +701,7 @@ def ensure_forgejo_repo_exists(cfg: Config, repo_name: str) -> None:
             "name": repo_name,
             "private": cfg.repo_private,
             "auto_init": False,
-            "default_branch": cfg.git_main_branch,
+            "default_branch": cfg.git_master_branch,
         },
     )
     if result.returncode != 0:
@@ -922,7 +922,7 @@ def doctor(cfg: Config) -> int:
         else False
     )
     remote_main_exists = (
-        remote_branch_exists(cfg.git_remote_name, cfg.git_main_branch, repo_root)
+        remote_branch_exists(cfg.git_remote_name, cfg.git_master_branch, repo_root)
         if repo_root is not None and current_remote is not None
         else False
     )
@@ -953,8 +953,8 @@ def doctor(cfg: Config) -> int:
             str(repo_root) if repo_root else str(workspace_root),
         ),
         (
-            "git_main_branch",
-            current_branch == cfg.git_main_branch,
+            "git_master_branch",
+            current_branch == cfg.git_master_branch,
             current_branch or "no branch",
         ),
         (
@@ -980,11 +980,11 @@ def doctor(cfg: Config) -> int:
         (
             "remote_main_branch",
             remote_main_exists,
-            f"{cfg.git_remote_name}/{cfg.git_main_branch}",
+            f"{cfg.git_remote_name}/{cfg.git_master_branch}",
         ),
         (
             "git_upstream",
-            upstream == f"{cfg.git_remote_name}/{cfg.git_main_branch}",
+            upstream == f"{cfg.git_remote_name}/{cfg.git_master_branch}",
             upstream or "missing",
         ),
         (
@@ -1045,7 +1045,7 @@ def ensure_repo_tracking_ready(cfg: Config) -> Path:
             "Check SSH auth and Forgejo remote configuration."
         )
 
-    ensure_branch_pushed(cfg.git_remote_name, cfg.git_main_branch, repo_root)
+    ensure_branch_pushed(cfg.git_remote_name, cfg.git_master_branch, repo_root)
     return repo_root
 
 
@@ -1081,11 +1081,11 @@ Artifacts:
 Repo readiness:
   Repo root:      {repo_root}
   Repo name:      {repo_name}
-  Local branch:   {cfg.git_main_branch}
+  Local branch:   {cfg.git_master_branch}
   Forgejo repo:   {cfg.agent_username}/{repo_name}
   Git remote:     {cfg.git_remote_name}
   Remote URL:     {expected_remote_url(cfg, repo_name)}
-  Upstream:       {cfg.git_remote_name}/{cfg.git_main_branch}
+  Upstream:       {cfg.git_remote_name}/{cfg.git_master_branch}
 
 Recommended checks:
   ssh -T {cfg.forgejo_ssh_host_alias}
