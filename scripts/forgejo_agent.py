@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
 
@@ -77,7 +78,10 @@ class Config:
             agent_email=env("AGENT_EMAIL", "agent@local.dev"),
             agent_fullname=env("AGENT_FULLNAME", "Local Agent"),
             token_name=env("TOKEN_NAME", "local-agent"),
-            token_scopes=env("TOKEN_SCOPES", "write:repository,write:user"),
+            token_scopes=env(
+                "TOKEN_SCOPES",
+                "read:issue,write:issue,write:repository,write:user"
+            ),
             git_remote_name=env("GIT_REMOTE_NAME", "forgejo"),
             git_main_branch=env("GIT_MAIN_BRANCH", "master"),
             initial_commit_message=env("INITIAL_COMMIT_MESSAGE", "Initial commit"),
@@ -267,6 +271,11 @@ def ensure_token(cfg: Config, force_rotate: bool) -> None:
         return
 
     print(f"Generating Forgejo access token for {cfg.agent_username}")
+
+    effective_token_name = cfg.token_name
+    if force_rotate:
+        effective_token_name = f"{cfg.token_name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
     result = container_exec(
         cfg,
         [
@@ -277,7 +286,7 @@ def ensure_token(cfg: Config, force_rotate: bool) -> None:
             "--username",
             cfg.agent_username,
             "--token-name",
-            cfg.token_name,
+            effective_token_name,
             "--scopes",
             cfg.token_scopes,
             "--raw",
