@@ -1,3 +1,3 @@
-# goose_template
+# nate_git_tree
 
 Project documentation.

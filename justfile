@@ -7,7 +7,7 @@ install:
     poetry install
 
 run *args:
-    poetry run goose_template {{args}}
+    poetry run nate_git_ls {{args}}
 
 test:
     poetry run pytest

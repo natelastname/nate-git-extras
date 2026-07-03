@@ -1,6 +1,6 @@
-# my_app
+# nate_git_tree
 
-Test app
+Small utilities for working with Git repositories.
 
 ## Setup
 
@@ -8,10 +8,21 @@ Test app
 poetry install
 ```
 
-## Usage
+## CLI tools
+
+Two entry points are provided once the package is installed:
+
+- `nate_git_cp`: git-aware recursive copy that respects `.gitignore`
+- `nate_git_ls`: tree-style listing that can optionally respect `.gitignore`
+
+### Examples
 
 ```bash
-poetry run my-app
+# Print a tree of the current repo
+poetry run nate_git_ls
+
+# Copy a template directory from this repo to a new location
+poetry run nate_git_cp path/to/src path/to/dest
 ```
 
 ## Tests
