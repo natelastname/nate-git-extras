@@ -5,7 +5,7 @@ Small utilities for working with Git repositories.
 ## Setup
 
 ```bash
-poetry install
+uv sync --extra dev
 ```
 
 ## CLI tools
@@ -19,14 +19,14 @@ Two entry points are provided once the package is installed:
 
 ```bash
 # Print a tree of the current repo
-poetry run nate_git_ls
+uv run nate_git_ls
 
 # Copy a template directory from this repo to a new location
-poetry run nate_git_cp path/to/src path/to/dest
+uv run nate_git_cp path/to/src path/to/dest
 ```
 
 ## Tests
 
 ```bash
-poetry run pytest
+uv run python -m pytest
 ```

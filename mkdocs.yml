@@ -1,6 +1,0 @@
-site_name: nate_git_tree
-theme:
-  name: material
-
-nav:
-  - Home: index.md
