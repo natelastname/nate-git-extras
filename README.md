@@ -1,6 +1,6 @@
 # nate-git-extras
 
-Small utilities for working with Git repositories.
+Small Git-aware filesystem utilities behind one Cyclopts CLI.
 
 ## Setup
 
@@ -8,28 +8,54 @@ Small utilities for working with Git repositories.
 uv sync --extra dev
 ```
 
-## CLI tools
+## CLI
 
-Two entry points are provided once the package is installed:
-
-- `nate_git_cp`: git-aware recursive copy that respects `.gitignore`
-- `nate_git_ls`: tree-style listing that can optionally respect `.gitignore`
-
-### Examples
+The package installs one entrypoint:
 
 ```bash
-# Print a tree of the current repo
-uv run nate_git_ls
+nate-git-extras COMMAND ...
+```
 
-# Copy a template directory from this repo to a new location
-uv run nate_git_cp path/to/src path/to/dest
+The current subcommands are:
 
+- `cp`: copy files or directories while respecting Git ignore rules
+- `ls`: print a tree-style directory listing
+
+### Copy
+
+```bash
 # Copy a directory into an existing directory (creates place1/folder1)
-uv run nate_git_cp ./folder1/ /home/nate/place1/
+uv run nate-git-extras cp ./folder1/ /home/nate/place1/
 
-# Copy the contents of a directory into an existing directory
-# (the shell expands ./folder1/* before it reaches nate_git_cp)
-uv run nate_git_cp ./folder1/* /home/nate/place1/
+# Copy shell-expanded sources directly into an existing directory
+uv run nate-git-extras cp ./folder1/* /home/nate/place1/
+
+# Copy a template directory's contents directly into the destination
+uv run nate-git-extras cp --template ./template/ ./new-project/
+
+# Preview a copy
+uv run nate-git-extras cp --dry-run ./folder1/ /home/nate/place1/
+```
+
+### List
+
+```bash
+# Print a tree of the current directory, excluding ignored paths
+uv run nate-git-extras ls
+
+# Show ignored entries without descending into ignored directories
+uv run nate-git-extras ls --include-ignored
+
+# Show and descend into ignored directories
+uv run nate-git-extras ls --traverse-ignored
+```
+
+Cyclopts provides command-specific help:
+
+```bash
+uv run nate-git-extras --help
+uv run nate-git-extras cp --help
+uv run nate-git-extras ls --help
 ```
 
 ## Tests

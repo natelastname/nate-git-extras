@@ -1,13 +1,17 @@
 from pathlib import Path
 import subprocess
+import tomllib
 
-import nate_git_extras.nate_git_cp as nate_git_cp
-import nate_git_extras.nate_git_ls as nate_git_ls
+from nate_git_extras.cli import app
 
 
-def test_nate_git_cp_has_main():
-    assert hasattr(nate_git_cp, "main")
-
+def run_cli(*args: str) -> None:
+    app(
+        list(args),
+        exit_on_error=False,
+        print_error=False,
+        result_action="return_value",
+    )
 
 
 def init_git_repo(path: Path) -> None:
@@ -31,8 +35,16 @@ def init_git_repo(path: Path) -> None:
     )
 
 
+def test_project_has_one_entrypoint() -> None:
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
-def test_nate_git_cp_directory_into_existing_dir(tmp_path):
+    assert project["project"]["scripts"] == {
+        "nate-git-extras": "nate_git_extras.cli:app"
+    }
+
+
+def test_cp_directory_into_existing_dir(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -45,15 +57,14 @@ def test_nate_git_cp_directory_into_existing_dir(tmp_path):
     dst_root = tmp_path / "place1"
     dst_root.mkdir()
 
-    nate_git_cp.main([str(src), str(dst_root)])
+    run_cli("cp", str(src), str(dst_root))
 
     dst_dir = dst_root / "folder1"
     assert dst_dir.is_dir()
     assert (dst_dir / "nested" / "file.txt").read_text(encoding="utf-8") == "hello"
 
 
-
-def test_nate_git_cp_glob_like_multiple_sources(tmp_path):
+def test_cp_glob_like_multiple_sources(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -69,19 +80,18 @@ def test_nate_git_cp_glob_like_multiple_sources(tmp_path):
     dst_root.mkdir()
 
     sources = sorted(src.iterdir())
-    argv = [str(p) for p in sources] + [str(dst_root)]
+    args = ["cp"]
+    for source in sources:
+        args.append(str(source))
+    args.append(str(dst_root))
+    run_cli(*args)
 
-    nate_git_cp.main(argv)
-
-    # Contents of folder1/ should end up directly in place1/, not place1/folder1/.
     assert not (dst_root / "folder1").exists()
     assert (dst_root / "top.txt").read_text(encoding="utf-8") == "top"
     assert (dst_root / "nested" / "file.txt").read_text(encoding="utf-8") == "nested"
 
 
-
-
-def test_nate_git_cp_template_mode_includes_dotdirs(tmp_path):
+def test_cp_template_mode_includes_dotdirs(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -93,26 +103,19 @@ def test_nate_git_cp_template_mode_includes_dotdirs(tmp_path):
     dot_dir = src / ".openhands"
     dot_dir.mkdir()
     (dot_dir / "config.yaml").write_text("dotdir", encoding="utf-8")
-
-    dot_file = src / ".specify"
-    dot_file.write_text("dotfile", encoding="utf-8")
+    (src / ".specify").write_text("dotfile", encoding="utf-8")
 
     dst_root = tmp_path / "place_template"
+    run_cli("cp", "--template", str(src), str(dst_root))
 
-    nate_git_cp.main(["--template", str(src), str(dst_root)])
-
-    # Destination root should be created and populated with the contents of src,
-    # not a nested template_src/ directory.
     assert dst_root.is_dir()
     assert not (dst_root / "template_src").exists()
-
     assert (dst_root / "regular.txt").read_text(encoding="utf-8") == "regular"
-    assert (dst_root / ".openhands").is_dir()
     assert (dst_root / ".openhands" / "config.yaml").read_text(encoding="utf-8") == "dotdir"
     assert (dst_root / ".specify").read_text(encoding="utf-8") == "dotfile"
 
 
-def test_nate_git_cp_template_mode_dry_run_does_not_create_destination(tmp_path):
+def test_cp_template_dry_run_does_not_create_destination(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -122,11 +125,36 @@ def test_nate_git_cp_template_mode_dry_run_does_not_create_destination(tmp_path)
     (src / "file.txt").write_text("content", encoding="utf-8")
 
     dst_root = tmp_path / "place_template"
+    run_cli("cp", "--template", "--dry-run", str(src), str(dst_root))
 
-    nate_git_cp.main(["--template", "--dry-run", str(src), str(dst_root)])
-
-    # Dry-run should not touch the filesystem at the destination.
     assert not dst_root.exists()
 
-def test_nate_git_ls_has_main():
-    assert hasattr(nate_git_ls, "main")
+
+def test_ls_ignore_modes(tmp_path: Path, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    (repo / ".gitignore").write_text("ignored/\nignored.txt\n", encoding="utf-8")
+    (repo / "visible.txt").write_text("visible", encoding="utf-8")
+    (repo / "ignored.txt").write_text("ignored", encoding="utf-8")
+    ignored_dir = repo / "ignored"
+    ignored_dir.mkdir()
+    (ignored_dir / "nested.txt").write_text("nested", encoding="utf-8")
+
+    run_cli("ls", str(repo))
+    default_output = capsys.readouterr().out
+    assert "visible.txt" in default_output
+    assert "ignored.txt" not in default_output
+    assert "ignored" not in default_output
+
+    run_cli("ls", str(repo), "--include-ignored")
+    included_output = capsys.readouterr().out
+    assert "ignored.txt" in included_output
+    assert "ignored" in included_output
+    assert "nested.txt" not in included_output
+
+    run_cli("ls", str(repo), "--traverse-ignored")
+    traversed_output = capsys.readouterr().out
+    assert "ignored.txt" in traversed_output
+    assert "nested.txt" in traversed_output
