@@ -209,7 +209,7 @@ def git_cp_template(
 
 
 def _git_cp_file(src_file: Path, dst: Path, *, verbose: bool, dry_run: bool) -> None:
-    src_file = src_file.expanduser().resolve()
+    src_file = src_file.expanduser()
     if not src_file.exists():
         raise SystemExit(f"source must exist: {src_file}")
     if src_file.is_symlink():
@@ -217,6 +217,7 @@ def _git_cp_file(src_file: Path, dst: Path, *, verbose: bool, dry_run: bool) -> 
     if not src_file.is_file():
         raise SystemExit(f"source is not a regular file: {src_file}")
 
+    src_file = src_file.resolve()
     git_root = _require_committed_git_root(src_file)
     dst_path = _resolve_dst(src_file, dst)
     if dst_path == src_file:
@@ -242,11 +243,13 @@ def _git_cp_file(src_file: Path, dst: Path, *, verbose: bool, dry_run: bool) -> 
 
 
 def _git_cp_one(src: Path, dst: Path, *, verbose: bool, dry_run: bool) -> None:
-    src = src.expanduser().resolve()
+    src = src.expanduser()
     if not src.exists():
         raise SystemExit(f"source must exist: {src}")
     if src.is_symlink():
         raise SystemExit(f"source must not be a symlink: {src}")
+
+    src = src.resolve()
     if src.is_dir():
         git_cp(src, dst, verbose=verbose, dry_run=dry_run)
         return
