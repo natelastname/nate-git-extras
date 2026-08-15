@@ -15,19 +15,15 @@ requires-python = ">=3.10,<3.14.1"
 dependencies = [
   "cyclopts>=4.22.1,<5.0.0",
   "loguru>=0.7.3,<0.8.0",
-]
-
-[project.scripts]
-nate-git-extras = "nate_git_extras.cli:app"
-
-[project.optional-dependencies]
-dev = [
   "pytest>=8,<9",
   "basedpyright>=1.31.5,<2.0.0",
   "ruff>=0.13.2,<0.14.0",
   "mkdocs<2.0",
   "mkdocs-material>=9.7.2,<10.0.0",
 ]
+
+[project.scripts]
+nate-git-extras = "nate_git_extras.cli:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
