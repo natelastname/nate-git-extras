@@ -1,8 +1,8 @@
 from pathlib import Path
 import subprocess
 
-import nate_git_tree.nate_git_cp as nate_git_cp
-import nate_git_tree.nate_git_ls as nate_git_ls
+import nate_git_extras.nate_git_cp as nate_git_cp
+import nate_git_extras.nate_git_ls as nate_git_ls
 
 
 def test_nate_git_cp_has_main():

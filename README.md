@@ -1,4 +1,4 @@
-# nate_git_tree
+# nate-git-extras
 
 Small utilities for working with Git repositories.
 
