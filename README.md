@@ -5,7 +5,7 @@ Small Git-aware filesystem utilities behind one Cyclopts CLI.
 ## Setup
 
 ```bash
-uv sync --extra dev
+uv sync
 ```
 
 ## CLI
@@ -61,5 +61,5 @@ uv run nate-git-extras ls --help
 ## Tests
 
 ```bash
-uv run python -m pytest
+uv run pytest
 ```
