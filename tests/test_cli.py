@@ -1,6 +1,6 @@
+from importlib.metadata import distribution
 from pathlib import Path
 import subprocess
-import tomllib
 
 from nate_git_extras.cli import app
 
@@ -36,12 +36,12 @@ def init_git_repo(path: Path) -> None:
 
 
 def test_project_has_one_entrypoint() -> None:
-    root = Path(__file__).resolve().parents[1]
-    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    console_scripts = {}
+    for entrypoint in distribution("nate-git-extras").entry_points:
+        if entrypoint.group == "console_scripts":
+            console_scripts[entrypoint.name] = entrypoint.value
 
-    assert project["project"]["scripts"] == {
-        "nate-git-extras": "nate_git_extras.cli:app"
-    }
+    assert console_scripts == {"nate-git-extras": "nate_git_extras.cli:app"}
 
 
 def test_cp_directory_into_existing_dir(tmp_path: Path) -> None:
