@@ -15,6 +15,7 @@ requires-python = ">=3.10,<3.14.1"
 dependencies = [
   "cyclopts>=4.22.1,<5.0.0",
   "loguru>=0.7.3,<0.8.0",
+  "rich>=15.0.0",
 ]
 
 [project.scripts]
