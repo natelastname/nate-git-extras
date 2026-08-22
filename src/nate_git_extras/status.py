@@ -60,6 +60,7 @@ class ScanStatus:
     thread: threading.Thread | None = None
     result: tuple[Path, list[BranchStatus]] | None = None
     error: BaseException | None = None
+    include_remotes: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +238,16 @@ def collect_branch_status(
     return root, branches
 
 
+def _split_branches(
+    branches: list[BranchStatus],
+) -> tuple[list[BranchStatus], list[BranchStatus]]:
+    local: list[BranchStatus] = []
+    remote: list[BranchStatus] = []
+    for branch in branches:
+        (remote if branch.remote else local).append(branch)
+    return local, remote
+
+
 def _age(seconds: int) -> str:
     minutes = max(0, seconds) // 60
     if minutes < 1:
@@ -311,7 +322,7 @@ def _header(
     if watch:
         header.append("  ↑/↓ select · g fetch remotes · q / Ctrl-C stop", style="dim")
         if remotes_visible:
-            header.append(" · remotes shown", style="cyan")
+            header.append(" · remote snapshot shown", style="cyan")
         if fetch_interval is not None:
             header.append(f" · fetch every {fetch_interval:g}s", style="dim")
     return header
@@ -322,7 +333,7 @@ def _footer(
     *,
     remotes_visible: bool,
     fetch: FetchStatus | None,
-    refreshing: bool = False,
+    refreshing_remotes: bool = False,
 ) -> Text:
     footer = Text(
         f"{summary.mergeable} mergeable · {summary.conflicts} conflicts"
@@ -332,8 +343,8 @@ def _footer(
     )
     if remotes_visible:
         footer.append(f" · {summary.remote} remote", style="dim cyan")
-    if refreshing:
-        footer.append(" · refreshing…", style="dim yellow")
+    if refreshing_remotes:
+        footer.append(" · refreshing remotes…", style="dim yellow")
     if fetch is not None:
         message = _fetch_message(fetch, time.time())
         if message is not None:
@@ -483,7 +494,7 @@ def _watch_layout(
     remotes_visible: bool,
     fetch_interval: float | None,
     fetch: FetchStatus,
-    refreshing: bool,
+    refreshing_remotes: bool,
 ) -> Layout:
     limit = max(1, height - 3)
     if len(rows) <= limit:
@@ -518,7 +529,7 @@ def _watch_layout(
                 summary,
                 remotes_visible=remotes_visible,
                 fetch=fetch,
-                refreshing=refreshing,
+                refreshing_remotes=refreshing_remotes,
             ),
             name="footer",
             size=1,
@@ -556,6 +567,7 @@ def _start_scan(
 
     scan.result = None
     scan.error = None
+    scan.include_remotes = include_remotes
 
     def run() -> None:
         try:
@@ -690,21 +702,24 @@ def print_branch_status(
         raise SystemExit("--interval requires --watch")
 
     console = Console()
-    root, branches = _snapshot(
+    root, local_branches = _snapshot(
         path,
         base=base,
         stale_days=stale_days,
-        include_remotes=watch and interval is not None,
+        include_remotes=False,
     )
     if not watch:
         console.print(
-            _static_dashboard(root, branches, base=base, now=int(time.time()))
+            _static_dashboard(root, local_branches, base=base, now=int(time.time()))
         )
         return
 
     fetch = FetchStatus()
     scan = ScanStatus()
-    include_remotes = interval is not None
+    remote_branches: list[BranchStatus] = []
+    remotes_loaded = False
+    remote_scan_pending = False
+    branches = local_branches
     selected_index = 0
     rows = _watch_rows(branches, int(time.time()), console.width)
     summary = _summary(branches)
@@ -714,7 +729,16 @@ def print_branch_status(
         _start_fetch(root, fetch)
     next_scan = time.monotonic() + _WATCH_REFRESH_SECONDS
 
+    def rebuild() -> None:
+        nonlocal branches, rows, summary, selected_index
+        selected_name = branches[selected_index].name if branches else None
+        branches = [*local_branches, *remote_branches]
+        selected_index = _selected_index(branches, selected_name)
+        rows = _watch_rows(branches, int(time.time()), console.width)
+        summary = _summary(branches)
+
     def render() -> Layout:
+        refreshing_remotes = scan.thread is not None and scan.include_remotes
         return _watch_layout(
             root,
             rows,
@@ -723,10 +747,10 @@ def print_branch_status(
             selected_index=selected_index,
             width=console.width,
             height=console.height,
-            remotes_visible=include_remotes,
+            remotes_visible=remotes_loaded,
             fetch_interval=interval,
             fetch=fetch,
-            refreshing=scan.thread is not None,
+            refreshing_remotes=refreshing_remotes,
         )
 
     with _watch_terminal(console) as fd:
@@ -746,7 +770,6 @@ def print_branch_status(
                         live.update(render(), refresh=True)
                         continue
                     if key == "g":
-                        include_remotes = True
                         if _start_fetch(root, fetch):
                             last_fetch = time.monotonic()
                         live.update(render(), refresh=True)
@@ -756,45 +779,70 @@ def print_branch_status(
                     fetch_changed = _poll_fetch(fetch)
                     if fetch_changed:
                         last_fetch = now
-                        next_scan = 0.0
+                        if fetch.state == "ok":
+                            remote_scan_pending = True
+                        live.update(render(), refresh=True)
 
+                    scan_kind = scan.include_remotes
                     scan_result = _poll_scan(scan)
                     if scan_result is not None:
-                        selected_name = (
-                            branches[selected_index].name if branches else None
-                        )
-                        root, branches = scan_result
-                        selected_index = _selected_index(branches, selected_name)
-                        rows = _watch_rows(branches, int(time.time()), console.width)
-                        summary = _summary(branches)
+                        root, scanned = scan_result
+                        if scan_kind:
+                            local_branches, remote_branches = _split_branches(scanned)
+                            remotes_loaded = True
+                            remote_scan_pending = False
+                            rebuild()
+                            live.update(render(), refresh=True)
+                        else:
+                            new_local, _ = _split_branches(scanned)
+                            changed = new_local != local_branches
+                            local_branches = new_local
+                            if changed:
+                                rebuild()
+                                live.update(render(), refresh=True)
                         next_scan = now + _WATCH_REFRESH_SECONDS
-                        live.update(render(), refresh=True)
                         continue
 
                     if (
                         interval is not None
                         and fetch.process is None
+                        and not remote_scan_pending
                         and now - last_fetch >= interval
                     ):
-                        _start_fetch(root, fetch)
-                        last_fetch = now
+                        if _start_fetch(root, fetch):
+                            last_fetch = now
+                            live.update(render(), refresh=True)
+                        continue
+
+                    if (
+                        remote_scan_pending
+                        and fetch.process is None
+                        and scan.thread is None
+                    ):
+                        _start_scan(
+                            path,
+                            base=base,
+                            stale_days=stale_days,
+                            include_remotes=True,
+                            scan=scan,
+                        )
                         live.update(render(), refresh=True)
                         continue
 
                     if (
                         fetch.process is None
                         and scan.thread is None
+                        and not remote_scan_pending
                         and now >= next_scan
                     ):
                         _start_scan(
                             path,
                             base=base,
                             stale_days=stale_days,
-                            include_remotes=include_remotes,
+                            include_remotes=False,
                             scan=scan,
                         )
                         next_scan = now + _WATCH_REFRESH_SECONDS
-                        live.update(render(), refresh=True)
             except KeyboardInterrupt:
                 return
             finally:
