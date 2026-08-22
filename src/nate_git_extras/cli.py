@@ -11,6 +11,7 @@ from loguru import logger
 
 from .cp import git_cp_many, git_cp_template
 from .ls import print_tree
+from .status import print_branch_status
 
 app = App(
     name="nate-git-extras",
@@ -90,3 +91,25 @@ def ls(
         include_ignored=include_ignored,
         traverse_ignored=traverse_ignored,
     )
+
+
+@app.command
+def status(
+    path: Path = Path("."),
+    /,
+    *,
+    base: str = "master",
+    stale_days: int = 14,
+) -> None:
+    """Show local branch merge and cleanup status relative to a base ref.
+
+    Parameters
+    ----------
+    path:
+        Repository path.
+    base:
+        Branch or commit-ish to compare against.
+    stale_days:
+        Mark branches whose tip has not moved in this many days as stale.
+    """
+    print_branch_status(path, base=base, stale_days=stale_days)

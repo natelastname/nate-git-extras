@@ -20,6 +20,7 @@ The current subcommands are:
 
 - `cp`: copy files or directories while respecting Git ignore rules
 - `ls`: print a tree-style directory listing
+- `status`: show a read-only branch merge/cleanup dashboard
 
 ### Copy
 
@@ -50,12 +51,36 @@ uv run nate-git-extras ls --include-ignored
 uv run nate-git-extras ls --traverse-ignored
 ```
 
+### Status
+
+```bash
+# Compare local branches with master
+uv run nate-git-extras status
+
+# Inspect another repository or base branch
+uv run nate-git-extras status /path/to/repo --base main
+
+# Change the inactivity threshold
+uv run nate-git-extras status --stale-days 7
+```
+
+`status` does not fetch, checkout, merge, or delete anything. It evaluates the local
+refs currently in the repository and shows:
+
+- `READY`: the branch tip can fast-forward or merge cleanly into the base
+- `CONFLICT`: a trial merge reports conflicts
+- `MERGED`: the branch is already contained in the base
+- `ABSORBED`: the branch's patches are already represented in the base
+- ahead/behind counts, tip activity age, stale branches, and checked-out/dirty
+  worktrees
+
 Cyclopts provides command-specific help:
 
 ```bash
 uv run nate-git-extras --help
 uv run nate-git-extras cp --help
 uv run nate-git-extras ls --help
+uv run nate-git-extras status --help
 ```
 
 ## Tests
