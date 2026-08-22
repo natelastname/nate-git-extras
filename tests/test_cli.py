@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 import subprocess
 
+import nate_git_extras.status as status_module
 from nate_git_extras.cli import app
 
 
@@ -239,3 +240,34 @@ def test_status_dashboard_marks_stale_and_dirty_worktrees(tmp_path: Path, capsys
     assert "old-agent" in output
     assert "stale" in output
     assert "dirty" in output
+
+
+def test_status_watch_refreshes_until_interrupted(tmp_path: Path, capsys, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    run_git(repo, "switch", "-c", "agent")
+    (repo / "agent.txt").write_text("done\n", encoding="utf-8")
+    run_git(repo, "add", ".")
+    run_git(repo, "commit", "-m", "agent work")
+    run_git(repo, "switch", "master")
+
+    sleeps = 0
+
+    def advance_then_stop(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 1:
+            run_git(repo, "merge", "--ff-only", "agent")
+            return
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(status_module.time, "sleep", advance_then_stop)
+
+    run_cli("status", str(repo), "--watch", "--interval", "0.01")
+    output = capsys.readouterr().out
+
+    assert sleeps == 2
+    assert "watching every 0.01s" in output
+    assert "MERGED" in output and "agent" in output

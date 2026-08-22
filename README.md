@@ -62,6 +62,12 @@ uv run nate-git-extras status /path/to/repo --base main
 
 # Change the inactivity threshold
 uv run nate-git-extras status --stale-days 7
+
+# Keep the dashboard on screen and refresh it every two seconds
+uv run nate-git-extras status --watch
+
+# Choose a faster/slower watch cadence
+uv run nate-git-extras status --watch --interval 0.5
 ```
 
 `status` does not fetch, checkout, merge, or delete anything. It evaluates the local
@@ -73,6 +79,9 @@ refs currently in the repository and shows:
 - `ABSORBED`: the branch's patches are already represented in the base
 - ahead/behind counts, tip activity age, stale branches, and checked-out/dirty
   worktrees
+
+`--watch` redraws the same dashboard in place until `Ctrl-C`; it does not turn the
+command into an interactive TUI or change its read-only behavior.
 
 Cyclopts provides command-specific help:
 

@@ -7,7 +7,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
@@ -194,26 +195,26 @@ def _age(seconds: int) -> str:
     return f"{days}d" if days < 60 else f"{days // 30}mo"
 
 
-def print_branch_status(
-    path: Path = Path("."),
+def _dashboard(
+    root: Path,
+    branches: list[BranchStatus],
     *,
-    base: str = "master",
-    stale_days: int = 14,
-) -> None:
-    now = int(time.time())
-    root, branches = collect_branch_status(
-        path, base=base, stale_days=stale_days, now=now
+    base: str,
+    now: int,
+    watch_interval: float | None = None,
+) -> Group:
+    header = Text.assemble(
+        ("Branch status", "bold"),
+        ("  base ", "dim"),
+        (base, "bold cyan"),
+        ("  ", "dim"),
+        (str(root), "dim"),
     )
-    console = Console()
-    console.print(
-        Text.assemble(
-            ("Branch status", "bold"),
-            ("  base ", "dim"),
-            (base, "bold cyan"),
-            ("  ", "dim"),
-            (str(root), "dim"),
+    if watch_interval is not None:
+        header.append(
+            f"  watching every {watch_interval:g}s · Ctrl-C to stop",
+            style="dim",
         )
-    )
 
     table = Table(box=None, pad_edge=False)
     table.add_column("Status", no_wrap=True)
@@ -265,11 +266,71 @@ def print_branch_status(
         )
         previous = branch.status
 
-    console.print(table)
-    console.print(
-        Text(
-            f"{mergeable} mergeable · {conflicts} conflicts · {cleanup} cleanup"
-            f" · {stale} stale · {live} checked out",
-            style="dim",
-        )
+    footer = Text(
+        f"{mergeable} mergeable · {conflicts} conflicts · {cleanup} cleanup"
+        f" · {stale} stale · {live} checked out",
+        style="dim",
     )
+    return Group(header, table, footer)
+
+
+def _snapshot(
+    path: Path,
+    *,
+    base: str,
+    stale_days: int,
+    watch_interval: float | None = None,
+) -> Group:
+    now = int(time.time())
+    root, branches = collect_branch_status(
+        path, base=base, stale_days=stale_days, now=now
+    )
+    return _dashboard(
+        root,
+        branches,
+        base=base,
+        now=now,
+        watch_interval=watch_interval,
+    )
+
+
+def print_branch_status(
+    path: Path = Path("."),
+    *,
+    base: str = "master",
+    stale_days: int = 14,
+    watch: bool = False,
+    interval: float = 2.0,
+) -> None:
+    if interval <= 0:
+        raise SystemExit("--interval must be positive")
+
+    console = Console()
+    if not watch:
+        console.print(_snapshot(path, base=base, stale_days=stale_days))
+        return
+
+    with Live(
+        _snapshot(
+            path,
+            base=base,
+            stale_days=stale_days,
+            watch_interval=interval,
+        ),
+        console=console,
+        auto_refresh=False,
+    ) as live:
+        try:
+            while True:
+                time.sleep(interval)
+                live.update(
+                    _snapshot(
+                        path,
+                        base=base,
+                        stale_days=stale_days,
+                        watch_interval=interval,
+                    ),
+                    refresh=True,
+                )
+        except KeyboardInterrupt:
+            return
