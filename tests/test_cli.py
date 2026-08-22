@@ -305,6 +305,34 @@ def test_status_watch_parses_arrow_keys() -> None:
     os.close(write_fd)
 
 
+def test_status_watch_navigation_does_not_rescan_git(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    for name in ["one", "two"]:
+        run_git(repo, "switch", "-c", name)
+        run_git(repo, "commit", "--allow-empty", "-m", name)
+        run_git(repo, "switch", "master")
+
+    scans = 0
+    real_collect = status_module.collect_branch_status
+
+    def collect(*args, **kwargs):
+        nonlocal scans
+        scans += 1
+        return real_collect(*args, **kwargs)
+
+    keys = iter(["down", "up", "down", "q"])
+    monkeypatch.setattr(status_module, "collect_branch_status", collect)
+    monkeypatch.setattr(status_module, "_watch_terminal", lambda _console: nullcontext(0))
+    monkeypatch.setattr(status_module, "_watch_key", lambda _fd, _timeout: next(keys))
+
+    run_cli("status", str(repo), "--watch")
+
+    assert scans == 1
+
+
 def test_status_watch_fetch_controls(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

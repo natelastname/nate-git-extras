@@ -28,8 +28,8 @@ _STATUS_STYLE = {
     "MERGED": "green",
     "ABSORBED": "cyan",
 }
-_WATCH_POLL_SECONDS = 0.1
-_WATCH_REFRESH_SECONDS = 1.0
+_WATCH_POLL_SECONDS = 0.05
+_WATCH_REFRESH_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +374,32 @@ def _dashboard(
     return layout
 
 
+def _render_snapshot(
+    root: Path,
+    branches: list[BranchStatus],
+    *,
+    base: str,
+    watch: bool = False,
+    include_remotes: bool = False,
+    fetch_interval: float | None = None,
+    fetch: FetchStatus | None = None,
+    selected: str | None = None,
+    height: int | None = None,
+) -> Group | Layout:
+    return _dashboard(
+        root,
+        branches,
+        base=base,
+        now=int(time.time()),
+        watch=watch,
+        remotes_visible=include_remotes,
+        fetch_interval=fetch_interval,
+        fetch=fetch,
+        selected=selected,
+        height=height,
+    )
+
+
 def _snapshot(
     path: Path,
     *,
@@ -385,22 +411,20 @@ def _snapshot(
     fetch: FetchStatus | None = None,
     selected: str | None = None,
     height: int | None = None,
-) -> tuple[list[BranchStatus], Group | Layout]:
-    now = int(time.time())
+) -> tuple[Path, list[BranchStatus], Group | Layout]:
     root, branches = collect_branch_status(
         path,
         base=base,
         stale_days=stale_days,
-        now=now,
+        now=int(time.time()),
         include_remotes=include_remotes,
     )
-    return branches, _dashboard(
+    return root, branches, _render_snapshot(
         root,
         branches,
         base=base,
-        now=now,
         watch=watch,
-        remotes_visible=include_remotes,
+        include_remotes=include_remotes,
         fetch_interval=fetch_interval,
         fetch=fetch,
         selected=selected,
@@ -433,7 +457,7 @@ def _watch_key(fd: int, timeout: float) -> str | None:
 
     sequence = first
     for _ in range(2):
-        readable, _, _ = select.select([fd], [], [], 0.02)
+        readable, _, _ = select.select([fd], [], [], 0.005)
         if not readable:
             break
         sequence += os.read(fd, 1)
@@ -509,21 +533,13 @@ def print_branch_status(
 
     console = Console()
     if not watch:
-        _, snapshot = _snapshot(path, base=base, stale_days=stale_days)
+        _, _, snapshot = _snapshot(path, base=base, stale_days=stale_days)
         console.print(snapshot)
         return
 
-    root = find_git_root(path)
-    if root is None:
-        raise SystemExit(f"not inside a Git repository: {path}")
-
     fetch = FetchStatus()
     include_remotes = interval is not None
-    last_fetch = time.monotonic()
-    if interval is not None:
-        _start_fetch(root, fetch)
-
-    branches, snapshot = _snapshot(
+    root, branches, snapshot = _snapshot(
         path,
         base=base,
         stale_days=stale_days,
@@ -534,10 +550,10 @@ def print_branch_status(
         height=console.height,
     )
     selected = branches[0].name if branches else None
-    _, snapshot = _snapshot(
-        path,
+    snapshot = _render_snapshot(
+        root,
+        branches,
         base=base,
-        stale_days=stale_days,
         watch=True,
         include_remotes=include_remotes,
         fetch_interval=interval,
@@ -545,15 +561,25 @@ def print_branch_status(
         selected=selected,
         height=console.height,
     )
+
+    last_fetch = time.monotonic()
+    if interval is not None:
+        _start_fetch(root, fetch)
+        snapshot = _render_snapshot(
+            root,
+            branches,
+            base=base,
+            watch=True,
+            include_remotes=include_remotes,
+            fetch_interval=interval,
+            fetch=fetch,
+            selected=selected,
+            height=console.height,
+        )
     next_refresh = time.monotonic() + _WATCH_REFRESH_SECONDS
 
     with _watch_terminal(console) as fd:
-        with Live(
-            snapshot,
-            console=console,
-            screen=True,
-            auto_refresh=False,
-        ) as live:
+        with Live(snapshot, console=console, screen=True, auto_refresh=False) as live:
             try:
                 while True:
                     key = _watch_key(fd, _WATCH_POLL_SECONDS)
@@ -561,12 +587,57 @@ def print_branch_status(
                         return
                     if key == "up":
                         selected = _move_selection(branches, selected, -1)
-                    elif key == "down":
+                        live.update(
+                            _render_snapshot(
+                                root,
+                                branches,
+                                base=base,
+                                watch=True,
+                                include_remotes=include_remotes,
+                                fetch_interval=interval,
+                                fetch=fetch,
+                                selected=selected,
+                                height=console.height,
+                            ),
+                            refresh=True,
+                        )
+                        continue
+                    if key == "down":
                         selected = _move_selection(branches, selected, 1)
-                    elif key == "g":
+                        live.update(
+                            _render_snapshot(
+                                root,
+                                branches,
+                                base=base,
+                                watch=True,
+                                include_remotes=include_remotes,
+                                fetch_interval=interval,
+                                fetch=fetch,
+                                selected=selected,
+                                height=console.height,
+                            ),
+                            refresh=True,
+                        )
+                        continue
+                    if key == "g":
                         include_remotes = True
                         if _start_fetch(root, fetch):
                             last_fetch = time.monotonic()
+                        live.update(
+                            _render_snapshot(
+                                root,
+                                branches,
+                                base=base,
+                                watch=True,
+                                include_remotes=include_remotes,
+                                fetch_interval=interval,
+                                fetch=fetch,
+                                selected=selected,
+                                height=console.height,
+                            ),
+                            refresh=True,
+                        )
+                        continue
 
                     now = time.monotonic()
                     fetch_changed = _poll_fetch(fetch)
@@ -579,28 +650,50 @@ def print_branch_status(
                     ):
                         _start_fetch(root, fetch)
                         last_fetch = now
-                        fetch_changed = True
-
-                    changed = key is not None or fetch_changed or now >= next_refresh
-                    if not changed:
+                        live.update(
+                            _render_snapshot(
+                                root,
+                                branches,
+                                base=base,
+                                watch=True,
+                                include_remotes=include_remotes,
+                                fetch_interval=interval,
+                                fetch=fetch,
+                                selected=selected,
+                                height=console.height,
+                            ),
+                            refresh=True,
+                        )
                         continue
 
-                    branches, snapshot = _snapshot(
+                    if not fetch_changed and now < next_refresh:
+                        continue
+
+                    root, branches = collect_branch_status(
                         path,
                         base=base,
                         stale_days=stale_days,
-                        watch=True,
+                        now=int(time.time()),
                         include_remotes=include_remotes,
-                        fetch_interval=interval,
-                        fetch=fetch,
-                        selected=selected,
-                        height=console.height,
                     )
                     if branches:
                         selected = branches[_selected_index(branches, selected)].name
                     else:
                         selected = None
-                    live.update(snapshot, refresh=True)
+                    live.update(
+                        _render_snapshot(
+                            root,
+                            branches,
+                            base=base,
+                            watch=True,
+                            include_remotes=include_remotes,
+                            fetch_interval=interval,
+                            fetch=fetch,
+                            selected=selected,
+                            height=console.height,
+                        ),
+                        refresh=True,
+                    )
                     next_refresh = now + _WATCH_REFRESH_SECONDS
             except KeyboardInterrupt:
                 return
