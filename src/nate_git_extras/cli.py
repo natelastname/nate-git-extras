@@ -114,7 +114,7 @@ def status(
     stale_days:
         Mark branches whose tip has not moved in this many days as stale.
     watch:
-        Continuously refresh the dashboard until Ctrl-C.
+        Continuously refresh the dashboard until q or Ctrl-C.
     interval:
         Seconds between refreshes in watch mode.
     """

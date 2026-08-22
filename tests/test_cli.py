@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from importlib.metadata import distribution
 from pathlib import Path
 import os
@@ -242,7 +243,7 @@ def test_status_dashboard_marks_stale_and_dirty_worktrees(tmp_path: Path, capsys
     assert "dirty" in output
 
 
-def test_status_watch_refreshes_until_interrupted(tmp_path: Path, capsys, monkeypatch) -> None:
+def test_status_watch_refreshes_and_quits_on_q(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -253,21 +254,20 @@ def test_status_watch_refreshes_until_interrupted(tmp_path: Path, capsys, monkey
     run_git(repo, "commit", "-m", "agent work")
     run_git(repo, "switch", "master")
 
-    sleeps = 0
+    polls = 0
 
-    def advance_then_stop(_seconds: float) -> None:
-        nonlocal sleeps
-        sleeps += 1
-        if sleeps == 1:
+    def advance_then_quit(_fd: int, _timeout: float) -> bool:
+        nonlocal polls
+        polls += 1
+        if polls == 1:
             run_git(repo, "merge", "--ff-only", "agent")
-            return
-        raise KeyboardInterrupt
+            return False
+        return True
 
-    monkeypatch.setattr(status_module.time, "sleep", advance_then_stop)
+    monkeypatch.setattr(status_module, "_watch_terminal", lambda _console: nullcontext(0))
+    monkeypatch.setattr(status_module, "_quit_requested", advance_then_quit)
 
     run_cli("status", str(repo), "--watch", "--interval", "0.01")
-    output = capsys.readouterr().out
 
-    assert sleeps == 2
-    assert "watching every 0.01s" in output
-    assert "MERGED" in output and "agent" in output
+    assert polls == 2
+    assert run_git(repo, "rev-parse", "master") == run_git(repo, "rev-parse", "agent")

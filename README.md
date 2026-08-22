@@ -63,7 +63,7 @@ uv run nate-git-extras status /path/to/repo --base main
 # Change the inactivity threshold
 uv run nate-git-extras status --stale-days 7
 
-# Keep the dashboard on screen and refresh it every two seconds
+# Use a full-screen live dashboard, refreshing every two seconds
 uv run nate-git-extras status --watch
 
 # Choose a faster/slower watch cadence
@@ -80,8 +80,10 @@ refs currently in the repository and shows:
 - ahead/behind counts, tip activity age, stale branches, and checked-out/dirty
   worktrees
 
-`--watch` redraws the same dashboard in place until `Ctrl-C`; it does not turn the
-command into an interactive TUI or change its read-only behavior.
+`--watch` uses the terminal's alternate screen, so the dashboard starts at the top of
+the terminal and occupies the screen without scrolling your shell history. Press `q`
+or `Ctrl-C` to exit and return to the previous terminal contents. Watch mode remains
+read-only.
 
 Cyclopts provides command-specific help:
 

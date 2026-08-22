@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import select
 import subprocess
+import sys
+import termios
 import time
+import tty
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -212,7 +219,7 @@ def _dashboard(
     )
     if watch_interval is not None:
         header.append(
-            f"  watching every {watch_interval:g}s · Ctrl-C to stop",
+            f"  watching every {watch_interval:g}s · q / Ctrl-C to stop",
             style="dim",
         )
 
@@ -294,6 +301,25 @@ def _snapshot(
     )
 
 
+@contextmanager
+def _watch_terminal(console: Console) -> Iterator[int]:
+    if not console.is_terminal or not sys.stdin.isatty():
+        raise SystemExit("--watch requires an interactive terminal")
+
+    fd = sys.stdin.fileno()
+    settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        yield fd
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, settings)
+
+
+def _quit_requested(fd: int, timeout: float) -> bool:
+    readable, _, _ = select.select([fd], [], [], timeout)
+    return bool(readable) and os.read(fd, 1).lower() == b"q"
+
+
 def print_branch_status(
     path: Path = Path("."),
     *,
@@ -310,27 +336,28 @@ def print_branch_status(
         console.print(_snapshot(path, base=base, stale_days=stale_days))
         return
 
-    with Live(
-        _snapshot(
-            path,
-            base=base,
-            stale_days=stale_days,
-            watch_interval=interval,
-        ),
-        console=console,
-        auto_refresh=False,
-    ) as live:
-        try:
-            while True:
-                time.sleep(interval)
-                live.update(
-                    _snapshot(
-                        path,
-                        base=base,
-                        stale_days=stale_days,
-                        watch_interval=interval,
-                    ),
-                    refresh=True,
-                )
-        except KeyboardInterrupt:
-            return
+    with _watch_terminal(console) as fd:
+        with Live(
+            _snapshot(
+                path,
+                base=base,
+                stale_days=stale_days,
+                watch_interval=interval,
+            ),
+            console=console,
+            screen=True,
+            auto_refresh=False,
+        ) as live:
+            try:
+                while not _quit_requested(fd, interval):
+                    live.update(
+                        _snapshot(
+                            path,
+                            base=base,
+                            stale_days=stale_days,
+                            watch_interval=interval,
+                        ),
+                        refresh=True,
+                    )
+            except KeyboardInterrupt:
+                return
