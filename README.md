@@ -84,11 +84,14 @@ active branch first within each group. A remote tracking ref that is identical t
 local branch is omitted; remote-only or diverged remote refs remain visible.
 
 By default, only local branches are displayed and `status` does not access the
-network. In `--watch` mode, press `g` to start `git fetch --all --prune` and display
-remote refs such as `origin/feature/foo`. The fetch runs asynchronously: the bottom
-status line shows `fetching…`, `fetch ok`, or a persistent fetch failure message while
-the dashboard remains responsive. Passing `--interval N` starts a fetch immediately
-and then automatically every N seconds.
+network. In `--watch` mode, press `g` to run one asynchronous `git fetch --all --prune`
+and take one snapshot of the remote branches. Those remote rows remain frozen while
+normal watch refreshes continue to update local branches only. Press `g` again to
+refresh the remote snapshot. Passing `--interval N` instead fetches and refreshes the
+remote snapshot automatically every N seconds.
+
+The bottom status line distinguishes `fetching…` from the one-time remote status
+calculation and reports `fetch ok` or a persistent fetch failure message.
 
 `--watch` uses the terminal's alternate screen, so the dashboard starts at the top of
 the terminal and occupies the screen without scrolling your shell history. The
