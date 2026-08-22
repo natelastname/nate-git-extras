@@ -101,9 +101,9 @@ def status(
     base: str = "master",
     stale_days: int = 14,
     watch: bool = False,
-    interval: float = 2.0,
+    interval: float | None = None,
 ) -> None:
-    """Show local branch merge and cleanup status relative to a base ref.
+    """Show branch merge and cleanup status relative to a base ref.
 
     Parameters
     ----------
@@ -114,9 +114,10 @@ def status(
     stale_days:
         Mark branches whose tip has not moved in this many days as stale.
     watch:
-        Continuously refresh the dashboard until q or Ctrl-C.
+        Continuously refresh the dashboard until q or Ctrl-C. Press g to fetch
+        and display remote branches.
     interval:
-        Seconds between refreshes in watch mode.
+        In watch mode, automatically fetch remotes every this many seconds.
     """
     print_branch_status(
         path,

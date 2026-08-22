@@ -63,15 +63,14 @@ uv run nate-git-extras status /path/to/repo --base main
 # Change the inactivity threshold
 uv run nate-git-extras status --stale-days 7
 
-# Use a full-screen live dashboard, refreshing every two seconds
+# Use the full-screen live dashboard
 uv run nate-git-extras status --watch
 
-# Choose a faster/slower watch cadence
-uv run nate-git-extras status --watch --interval 0.5
+# In watch mode, fetch/display remote branches every 30 seconds
+uv run nate-git-extras status --watch --interval 30
 ```
 
-`status` does not fetch, checkout, merge, or delete anything. It evaluates the local
-refs currently in the repository and shows:
+`status` evaluates the refs currently in the repository and shows:
 
 - `READY`: the branch tip can fast-forward or merge cleanly into the base
 - `CONFLICT`: a trial merge reports conflicts
@@ -80,10 +79,15 @@ refs currently in the repository and shows:
 - ahead/behind counts, tip activity age, stale branches, and checked-out/dirty
   worktrees
 
+By default, only local branches are displayed and `status` does not access the
+network. In `--watch` mode, press `g` to run `git fetch --all --prune` and display
+remote refs such as `origin/feature/foo`. Once enabled, remote rows remain visible.
+Passing `--interval N` fetches immediately and then automatically every N seconds.
+
 `--watch` uses the terminal's alternate screen, so the dashboard starts at the top of
 the terminal and occupies the screen without scrolling your shell history. The
 summary line is pinned to the bottom of the screen. Press `q` or `Ctrl-C` to exit and
-return to the previous terminal contents. Watch mode remains read-only.
+return to the previous terminal contents.
 
 Cyclopts provides command-specific help:
 

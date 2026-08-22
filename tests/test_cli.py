@@ -243,7 +243,7 @@ def test_status_dashboard_marks_stale_and_dirty_worktrees(tmp_path: Path, capsys
     assert "dirty" in output
 
 
-def test_status_watch_refreshes_and_quits_on_q(tmp_path: Path, monkeypatch) -> None:
+def test_status_remote_refs_are_opt_in(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -253,21 +253,37 @@ def test_status_watch_refreshes_and_quits_on_q(tmp_path: Path, monkeypatch) -> N
     run_git(repo, "add", ".")
     run_git(repo, "commit", "-m", "agent work")
     run_git(repo, "switch", "master")
+    run_git(repo, "update-ref", "refs/remotes/origin/agent", "agent")
 
-    polls = 0
+    _, local_only = status_module.collect_branch_status(repo)
+    _, with_remotes = status_module.collect_branch_status(repo, include_remotes=True)
 
-    def advance_then_quit(_fd: int, _timeout: float) -> bool:
-        nonlocal polls
-        polls += 1
-        if polls == 1:
-            run_git(repo, "merge", "--ff-only", "agent")
-            return False
-        return True
+    assert "origin/agent" not in {branch.name for branch in local_only}
+    remote = next(branch for branch in with_remotes if branch.name == "origin/agent")
+    assert remote.remote
+    assert remote.status == "READY"
+
+
+def test_status_watch_fetch_controls(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    fetches = 0
+    keys = iter(["g", "q"])
+
+    def fetch(_root: Path) -> None:
+        nonlocal fetches
+        fetches += 1
 
     monkeypatch.setattr(status_module, "_watch_terminal", lambda _console: nullcontext(0))
-    monkeypatch.setattr(status_module, "_quit_requested", advance_then_quit)
+    monkeypatch.setattr(status_module, "_watch_key", lambda _fd, _timeout: next(keys))
+    monkeypatch.setattr(status_module, "_fetch_remotes", fetch)
 
-    run_cli("status", str(repo), "--watch", "--interval", "0.01")
+    run_cli("status", str(repo), "--watch")
+    assert fetches == 1
 
-    assert polls == 2
-    assert run_git(repo, "rev-parse", "master") == run_git(repo, "rev-parse", "agent")
+    fetches = 0
+    monkeypatch.setattr(status_module, "_watch_key", lambda _fd, _timeout: "q")
+    run_cli("status", str(repo), "--watch", "--interval", "60")
+    assert fetches == 1
