@@ -79,15 +79,22 @@ uv run nate-git-extras status --watch --interval 30
 - ahead/behind counts, tip activity age, stale branches, and checked-out/dirty
   worktrees
 
+Rows are sorted with local branches first, then remote refs, with the most recently
+active branch first within each group. A remote tracking ref that is identical to its
+local branch is omitted; remote-only or diverged remote refs remain visible.
+
 By default, only local branches are displayed and `status` does not access the
-network. In `--watch` mode, press `g` to run `git fetch --all --prune` and display
-remote refs such as `origin/feature/foo`. Once enabled, remote rows remain visible.
-Passing `--interval N` fetches immediately and then automatically every N seconds.
+network. In `--watch` mode, press `g` to start `git fetch --all --prune` and display
+remote refs such as `origin/feature/foo`. The fetch runs asynchronously: the bottom
+status line shows `fetching…`, `fetch ok`, or a persistent fetch failure message while
+the dashboard remains responsive. Passing `--interval N` starts a fetch immediately
+and then automatically every N seconds.
 
 `--watch` uses the terminal's alternate screen, so the dashboard starts at the top of
 the terminal and occupies the screen without scrolling your shell history. The
-summary line is pinned to the bottom of the screen. Press `q` or `Ctrl-C` to exit and
-return to the previous terminal contents.
+summary line is pinned to the bottom of the screen. Use the up/down arrow keys to move
+the highlighted row; the table scrolls to keep the selection visible. Press `q` or
+`Ctrl-C` to exit and return to the previous terminal contents.
 
 Cyclopts provides command-specific help:
 

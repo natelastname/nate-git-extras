@@ -3,6 +3,7 @@ from importlib.metadata import distribution
 from pathlib import Path
 import os
 import subprocess
+import time
 
 import nate_git_extras.status as status_module
 from nate_git_extras.cli import app
@@ -243,25 +244,65 @@ def test_status_dashboard_marks_stale_and_dirty_worktrees(tmp_path: Path, capsys
     assert "dirty" in output
 
 
-def test_status_remote_refs_are_opt_in(tmp_path: Path) -> None:
+def test_status_sorts_local_then_remote_by_activity(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
 
-    run_git(repo, "switch", "-c", "agent")
-    (repo / "agent.txt").write_text("done\n", encoding="utf-8")
-    run_git(repo, "add", ".")
-    run_git(repo, "commit", "-m", "agent work")
+    for name, date in [("local-old", "2020-01-01T00:00:00+00:00"), ("local-new", "2021-01-01T00:00:00+00:00")]:
+        run_git(repo, "switch", "-c", name)
+        run_git(
+            repo,
+            "commit",
+            "--allow-empty",
+            "-m",
+            name,
+            env={"GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date},
+        )
+        run_git(repo, "switch", "master")
+
+    run_git(repo, "switch", "-c", "remote-source")
+    remote_date = "2030-01-01T00:00:00+00:00"
+    run_git(
+        repo,
+        "commit",
+        "--allow-empty",
+        "-m",
+        "remote-only",
+        env={"GIT_AUTHOR_DATE": remote_date, "GIT_COMMITTER_DATE": remote_date},
+    )
+    remote_sha = run_git(repo, "rev-parse", "HEAD")
     run_git(repo, "switch", "master")
-    run_git(repo, "update-ref", "refs/remotes/origin/agent", "agent")
+    run_git(repo, "update-ref", "refs/remotes/origin/remote-only", remote_sha)
+    run_git(repo, "branch", "-D", "remote-source")
+    run_git(repo, "update-ref", "refs/remotes/origin/local-new", "local-new")
 
     _, local_only = status_module.collect_branch_status(repo)
     _, with_remotes = status_module.collect_branch_status(repo, include_remotes=True)
 
-    assert "origin/agent" not in {branch.name for branch in local_only}
-    remote = next(branch for branch in with_remotes if branch.name == "origin/agent")
-    assert remote.remote
-    assert remote.status == "READY"
+    assert [branch.name for branch in local_only] == ["local-new", "local-old"]
+    assert [branch.name for branch in with_remotes] == [
+        "local-new",
+        "local-old",
+        "origin/remote-only",
+    ]
+    assert with_remotes[-1].remote
+    assert status_module._move_selection(with_remotes, "local-new", 1) == "local-old"
+    assert status_module._move_selection(with_remotes, "local-old", -1) == "local-new"
+
+
+def test_status_watch_parses_arrow_keys() -> None:
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"\x1b[A")
+    assert status_module._watch_key(read_fd, 0.1) == "up"
+    os.close(read_fd)
+    os.close(write_fd)
+
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"\x1b[B")
+    assert status_module._watch_key(read_fd, 0.1) == "down"
+    os.close(read_fd)
+    os.close(write_fd)
 
 
 def test_status_watch_fetch_controls(tmp_path: Path, monkeypatch) -> None:
@@ -272,13 +313,15 @@ def test_status_watch_fetch_controls(tmp_path: Path, monkeypatch) -> None:
     fetches = 0
     keys = iter(["g", "q"])
 
-    def fetch(_root: Path) -> None:
+    def start_fetch(_root: Path, fetch: status_module.FetchStatus) -> bool:
         nonlocal fetches
         fetches += 1
+        fetch.state = "fetching"
+        return True
 
     monkeypatch.setattr(status_module, "_watch_terminal", lambda _console: nullcontext(0))
     monkeypatch.setattr(status_module, "_watch_key", lambda _fd, _timeout: next(keys))
-    monkeypatch.setattr(status_module, "_fetch_remotes", fetch)
+    monkeypatch.setattr(status_module, "_start_fetch", start_fetch)
 
     run_cli("status", str(repo), "--watch")
     assert fetches == 1
@@ -287,3 +330,20 @@ def test_status_watch_fetch_controls(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(status_module, "_watch_key", lambda _fd, _timeout: "q")
     run_cli("status", str(repo), "--watch", "--interval", "60")
     assert fetches == 1
+
+
+def test_fetch_status_reports_failure(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+    run_git(repo, "remote", "add", "origin", str(tmp_path / "missing.git"))
+
+    fetch = status_module.FetchStatus()
+    status_module._start_fetch(repo, fetch)
+    for _ in range(100):
+        if status_module._poll_fetch(fetch):
+            break
+        time.sleep(0.01)
+
+    assert fetch.state == "failed"
+    assert fetch.detail.startswith("fatal:")

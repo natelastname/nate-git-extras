@@ -22,14 +22,14 @@ from rich.text import Text
 
 from .git_utils import find_git_root
 
-_STATUS_ORDER = {"READY": 0, "CONFLICT": 1, "MERGED": 2, "ABSORBED": 3}
 _STATUS_STYLE = {
     "READY": "bold green",
     "CONFLICT": "bold red",
     "MERGED": "green",
     "ABSORBED": "cyan",
 }
-_WATCH_REFRESH_SECONDS = 2.0
+_WATCH_POLL_SECONDS = 0.1
+_WATCH_REFRESH_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +46,14 @@ class BranchStatus:
     remote: bool = False
 
 
+@dataclass(slots=True)
+class FetchStatus:
+    process: subprocess.Popen[str] | None = None
+    state: str = "idle"
+    detail: str = ""
+    finished_at: float | None = None
+
+
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "-C", str(root), *args],
@@ -60,33 +68,40 @@ def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 
 
 def _refs(root: Path, *, include_remotes: bool) -> list[tuple[str, int, bool]]:
-    result = _git(
+    local = _git(
         root,
         "for-each-ref",
-        "--format=%(refname:short)\t%(committerdate:unix)",
+        "--format=%(refname:short)\t%(committerdate:unix)\t%(objectname)",
         "refs/heads/",
     )
     refs: list[tuple[str, int, bool]] = []
-    for line in result.stdout.splitlines():
-        if line:
-            name, timestamp = line.split("\t", 1)
-            refs.append((name, int(timestamp), False))
+    local_shas: dict[str, str] = {}
+    for line in local.stdout.splitlines():
+        if not line:
+            continue
+        name, timestamp, sha = line.split("\t", 2)
+        refs.append((name, int(timestamp), False))
+        local_shas[name] = sha
 
     if not include_remotes:
         return refs
 
-    result = _git(
+    remote = _git(
         root,
         "for-each-ref",
-        "--format=%(refname:short)\t%(committerdate:unix)\t%(symref)",
+        "--format=%(refname:short)\t%(committerdate:unix)\t%(objectname)\t%(symref)",
         "refs/remotes/",
     )
-    for line in result.stdout.splitlines():
+    for line in remote.stdout.splitlines():
         if not line:
             continue
-        name, timestamp, symref = line.split("\t", 2)
-        if not symref:
-            refs.append((name, int(timestamp), True))
+        name, timestamp, sha, symref = line.split("\t", 3)
+        if symref:
+            continue
+        local_name = name.split("/", 1)[1] if "/" in name else name
+        if local_shas.get(local_name) == sha:
+            continue
+        refs.append((name, int(timestamp), True))
     return refs
 
 
@@ -134,10 +149,6 @@ def _mergeability(root: Path, base: str, branch: str, behind: int) -> str:
         return "conflict"
     detail = result.stderr.strip() or result.stdout.strip()
     raise RuntimeError(detail or f"git merge-tree failed for {branch}")
-
-
-def _fetch_remotes(root: Path) -> None:
-    _git(root, "fetch", "--all", "--prune")
 
 
 def collect_branch_status(
@@ -204,14 +215,7 @@ def collect_branch_status(
             )
         )
 
-    branches.sort(
-        key=lambda branch: (
-            _STATUS_ORDER[branch.status],
-            branch.remote,
-            -branch.last_commit,
-            branch.name,
-        )
-    )
+    branches.sort(key=lambda branch: (branch.remote, -branch.last_commit, branch.name))
     return root, branches
 
 
@@ -228,6 +232,48 @@ def _age(seconds: int) -> str:
     return f"{days}d" if days < 60 else f"{days // 30}mo"
 
 
+def _selected_index(branches: list[BranchStatus], selected: str | None) -> int:
+    if not branches or selected is None:
+        return 0
+    for index, branch in enumerate(branches):
+        if branch.name == selected:
+            return index
+    return 0
+
+
+def _move_selection(
+    branches: list[BranchStatus], selected: str | None, delta: int
+) -> str | None:
+    if not branches:
+        return None
+    index = _selected_index(branches, selected)
+    index = max(0, min(len(branches) - 1, index + delta))
+    return branches[index].name
+
+
+def _visible_branches(
+    branches: list[BranchStatus], selected: str | None, height: int | None
+) -> list[BranchStatus]:
+    if height is None or selected is None:
+        return branches
+    limit = max(1, height - 3)
+    if len(branches) <= limit:
+        return branches
+    index = _selected_index(branches, selected)
+    start = max(0, min(index - limit // 2, len(branches) - limit))
+    return branches[start : start + limit]
+
+
+def _fetch_message(fetch: FetchStatus, now: float) -> Text | None:
+    if fetch.state == "fetching":
+        return Text("fetching…", style="bold yellow")
+    if fetch.state == "failed":
+        return Text(f"fetch failed: {fetch.detail}", style="bold red")
+    if fetch.state == "ok" and fetch.finished_at is not None:
+        return Text(f"fetch ok {_age(int(now - fetch.finished_at))} ago", style="green")
+    return None
+
+
 def _dashboard(
     root: Path,
     branches: list[BranchStatus],
@@ -237,6 +283,9 @@ def _dashboard(
     watch: bool = False,
     remotes_visible: bool = False,
     fetch_interval: float | None = None,
+    fetch: FetchStatus | None = None,
+    selected: str | None = None,
+    height: int | None = None,
 ) -> Group | Layout:
     header = Text.assemble(
         ("Branch status", "bold"),
@@ -246,7 +295,7 @@ def _dashboard(
         (str(root), "dim"),
     )
     if watch:
-        header.append("  g fetch remotes · q / Ctrl-C to stop", style="dim")
+        header.append("  ↑/↓ select · g fetch remotes · q / Ctrl-C stop", style="dim")
         if remotes_visible:
             header.append(" · remotes shown", style="cyan")
         if fetch_interval is not None:
@@ -261,38 +310,25 @@ def _dashboard(
     table.add_column("Last active", justify="right", no_wrap=True)
     table.add_column("Worktree", overflow="ellipsis", no_wrap=True)
 
-    mergeable = conflicts = cleanup = stale = live = remote_count = 0
-    previous: str | None = None
-    for branch in branches:
-        if previous is not None and branch.status != previous:
-            table.add_section()
-
+    visible = _visible_branches(branches, selected, height)
+    for branch in visible:
         activity = Text(_age(now - branch.last_commit))
         if branch.stale:
             activity.append(" stale", style="bold yellow")
-            stale += 1
 
         merge = Text(branch.merge)
         if branch.merge in {"ff", "clean"}:
             merge.stylize("green")
-            mergeable += 1
         elif branch.merge == "conflict":
             merge.stylize("bold red")
-            conflicts += 1
 
         worktree = Text("—", style="dim")
         if branch.worktree is not None:
-            live += 1
             state = "dirty" if branch.dirty else "clean"
             style = "bold red" if branch.dirty else "cyan"
             worktree = Text.assemble(
                 (state, style), (" · ", "dim"), str(branch.worktree)
             )
-
-        if branch.remote:
-            remote_count += 1
-        elif branch.status in {"MERGED", "ABSORBED"}:
-            cleanup += 1
 
         table.add_row(
             Text(branch.status, style=_STATUS_STYLE[branch.status]),
@@ -302,9 +338,18 @@ def _dashboard(
             merge,
             activity,
             worktree,
+            style="reverse" if branch.name == selected else None,
         )
-        previous = branch.status
 
+    mergeable = sum(branch.merge in {"ff", "clean"} for branch in branches)
+    conflicts = sum(branch.merge == "conflict" for branch in branches)
+    cleanup = sum(
+        not branch.remote and branch.status in {"MERGED", "ABSORBED"}
+        for branch in branches
+    )
+    stale = sum(branch.stale for branch in branches)
+    live = sum(branch.worktree is not None for branch in branches)
+    remote_count = sum(branch.remote for branch in branches)
     footer = Text(
         f"{mergeable} mergeable · {conflicts} conflicts · {cleanup} cleanup"
         f" · {stale} stale · {live} checked out",
@@ -312,6 +357,11 @@ def _dashboard(
     )
     if remotes_visible:
         footer.append(f" · {remote_count} remote", style="dim cyan")
+    if fetch is not None:
+        message = _fetch_message(fetch, time.time())
+        if message is not None:
+            footer.append(" · ", style="dim")
+            footer.append_text(message)
 
     if not watch:
         return Group(header, table, footer)
@@ -332,7 +382,10 @@ def _snapshot(
     watch: bool = False,
     include_remotes: bool = False,
     fetch_interval: float | None = None,
-) -> Group | Layout:
+    fetch: FetchStatus | None = None,
+    selected: str | None = None,
+    height: int | None = None,
+) -> tuple[list[BranchStatus], Group | Layout]:
     now = int(time.time())
     root, branches = collect_branch_status(
         path,
@@ -341,7 +394,7 @@ def _snapshot(
         now=now,
         include_remotes=include_remotes,
     )
-    return _dashboard(
+    return branches, _dashboard(
         root,
         branches,
         base=base,
@@ -349,6 +402,9 @@ def _snapshot(
         watch=watch,
         remotes_visible=include_remotes,
         fetch_interval=fetch_interval,
+        fetch=fetch,
+        selected=selected,
+        height=height,
     )
 
 
@@ -370,7 +426,72 @@ def _watch_key(fd: int, timeout: float) -> str | None:
     readable, _, _ = select.select([fd], [], [], timeout)
     if not readable:
         return None
-    return os.read(fd, 1).decode(errors="ignore").lower()
+
+    first = os.read(fd, 1)
+    if first != b"\x1b":
+        return first.decode(errors="ignore").lower()
+
+    sequence = first
+    for _ in range(2):
+        readable, _, _ = select.select([fd], [], [], 0.02)
+        if not readable:
+            break
+        sequence += os.read(fd, 1)
+    if sequence in {b"\x1b[A", b"\x1bOA"}:
+        return "up"
+    if sequence in {b"\x1b[B", b"\x1bOB"}:
+        return "down"
+    return None
+
+
+def _start_fetch(root: Path, fetch: FetchStatus) -> bool:
+    if fetch.process is not None:
+        return False
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    fetch.process = subprocess.Popen(
+        ["git", "-C", str(root), "fetch", "--all", "--prune"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    fetch.state = "fetching"
+    fetch.detail = ""
+    return True
+
+
+def _poll_fetch(fetch: FetchStatus) -> bool:
+    process = fetch.process
+    if process is None or process.poll() is None:
+        return False
+
+    stdout, stderr = process.communicate()
+    fetch.process = None
+    fetch.finished_at = time.time()
+    if process.returncode == 0:
+        fetch.state = "ok"
+        fetch.detail = ""
+        return True
+
+    lines = (stderr.strip() or stdout.strip()).splitlines()
+    detail = lines[-1] if lines else f"exit {process.returncode}"
+    for line in reversed(lines):
+        if line.startswith(("fatal:", "error:")):
+            detail = line
+            break
+    fetch.state = "failed"
+    fetch.detail = detail[:160]
+    return True
+
+
+def _stop_fetch(fetch: FetchStatus) -> None:
+    if fetch.process is None:
+        return
+    fetch.process.terminate()
+    fetch.process.wait()
+    fetch.process = None
 
 
 def print_branch_status(
@@ -388,58 +509,100 @@ def print_branch_status(
 
     console = Console()
     if not watch:
-        console.print(_snapshot(path, base=base, stale_days=stale_days))
+        _, snapshot = _snapshot(path, base=base, stale_days=stale_days)
+        console.print(snapshot)
         return
 
     root = find_git_root(path)
     if root is None:
         raise SystemExit(f"not inside a Git repository: {path}")
 
+    fetch = FetchStatus()
     include_remotes = interval is not None
-    if include_remotes:
-        _fetch_remotes(root)
     last_fetch = time.monotonic()
-    poll_seconds = min(_WATCH_REFRESH_SECONDS, interval or _WATCH_REFRESH_SECONDS)
+    if interval is not None:
+        _start_fetch(root, fetch)
+
+    branches, snapshot = _snapshot(
+        path,
+        base=base,
+        stale_days=stale_days,
+        watch=True,
+        include_remotes=include_remotes,
+        fetch_interval=interval,
+        fetch=fetch,
+        height=console.height,
+    )
+    selected = branches[0].name if branches else None
+    _, snapshot = _snapshot(
+        path,
+        base=base,
+        stale_days=stale_days,
+        watch=True,
+        include_remotes=include_remotes,
+        fetch_interval=interval,
+        fetch=fetch,
+        selected=selected,
+        height=console.height,
+    )
+    next_refresh = time.monotonic() + _WATCH_REFRESH_SECONDS
 
     with _watch_terminal(console) as fd:
         with Live(
-            _snapshot(
-                path,
-                base=base,
-                stale_days=stale_days,
-                watch=True,
-                include_remotes=include_remotes,
-                fetch_interval=interval,
-            ),
+            snapshot,
             console=console,
             screen=True,
             auto_refresh=False,
         ) as live:
             try:
                 while True:
-                    key = _watch_key(fd, poll_seconds)
+                    key = _watch_key(fd, _WATCH_POLL_SECONDS)
                     if key == "q":
                         return
+                    if key == "up":
+                        selected = _move_selection(branches, selected, -1)
+                    elif key == "down":
+                        selected = _move_selection(branches, selected, 1)
+                    elif key == "g":
+                        include_remotes = True
+                        if _start_fetch(root, fetch):
+                            last_fetch = time.monotonic()
 
                     now = time.monotonic()
-                    should_fetch = key == "g" or (
-                        interval is not None and now - last_fetch >= interval
-                    )
-                    if should_fetch:
-                        _fetch_remotes(root)
-                        include_remotes = True
+                    fetch_changed = _poll_fetch(fetch)
+                    if fetch_changed:
                         last_fetch = now
+                    if (
+                        interval is not None
+                        and fetch.process is None
+                        and now - last_fetch >= interval
+                    ):
+                        _start_fetch(root, fetch)
+                        last_fetch = now
+                        fetch_changed = True
 
-                    live.update(
-                        _snapshot(
-                            path,
-                            base=base,
-                            stale_days=stale_days,
-                            watch=True,
-                            include_remotes=include_remotes,
-                            fetch_interval=interval,
-                        ),
-                        refresh=True,
+                    changed = key is not None or fetch_changed or now >= next_refresh
+                    if not changed:
+                        continue
+
+                    branches, snapshot = _snapshot(
+                        path,
+                        base=base,
+                        stale_days=stale_days,
+                        watch=True,
+                        include_remotes=include_remotes,
+                        fetch_interval=interval,
+                        fetch=fetch,
+                        selected=selected,
+                        height=console.height,
                     )
+                    if branches:
+                        selected = branches[_selected_index(branches, selected)].name
+                    else:
+                        selected = None
+                    live.update(snapshot, refresh=True)
+                    next_refresh = now + _WATCH_REFRESH_SECONDS
             except KeyboardInterrupt:
                 return
+            finally:
+                _stop_fetch(fetch)
