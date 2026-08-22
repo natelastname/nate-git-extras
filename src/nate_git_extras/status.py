@@ -54,6 +54,16 @@ class FetchStatus:
     finished_at: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DashboardSummary:
+    mergeable: int
+    conflicts: int
+    cleanup: int
+    stale: int
+    live: int
+    remote: int
+
+
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "-C", str(root), *args],
@@ -251,17 +261,18 @@ def _move_selection(
     return branches[index].name
 
 
-def _visible_branches(
-    branches: list[BranchStatus], selected: str | None, height: int | None
-) -> list[BranchStatus]:
-    if height is None or selected is None:
-        return branches
-    limit = max(1, height - 3)
-    if len(branches) <= limit:
-        return branches
-    index = _selected_index(branches, selected)
-    start = max(0, min(index - limit // 2, len(branches) - limit))
-    return branches[start : start + limit]
+def _summary(branches: list[BranchStatus]) -> DashboardSummary:
+    return DashboardSummary(
+        mergeable=sum(branch.merge in {"ff", "clean"} for branch in branches),
+        conflicts=sum(branch.merge == "conflict" for branch in branches),
+        cleanup=sum(
+            not branch.remote and branch.status in {"MERGED", "ABSORBED"}
+            for branch in branches
+        ),
+        stale=sum(branch.stale for branch in branches),
+        live=sum(branch.worktree is not None for branch in branches),
+        remote=sum(branch.remote for branch in branches),
+    )
 
 
 def _fetch_message(fetch: FetchStatus, now: float) -> Text | None:
@@ -274,19 +285,14 @@ def _fetch_message(fetch: FetchStatus, now: float) -> Text | None:
     return None
 
 
-def _dashboard(
+def _header(
     root: Path,
-    branches: list[BranchStatus],
-    *,
     base: str,
-    now: int,
-    watch: bool = False,
-    remotes_visible: bool = False,
-    fetch_interval: float | None = None,
-    fetch: FetchStatus | None = None,
-    selected: str | None = None,
-    height: int | None = None,
-) -> Group | Layout:
+    *,
+    watch: bool,
+    remotes_visible: bool,
+    fetch_interval: float | None,
+) -> Text:
     header = Text.assemble(
         ("Branch status", "bold"),
         ("  base ", "dim"),
@@ -300,7 +306,38 @@ def _dashboard(
             header.append(" · remotes shown", style="cyan")
         if fetch_interval is not None:
             header.append(f" · fetch every {fetch_interval:g}s", style="dim")
+    return header
 
+
+def _footer(
+    summary: DashboardSummary,
+    *,
+    remotes_visible: bool,
+    fetch: FetchStatus | None,
+) -> Text:
+    footer = Text(
+        f"{summary.mergeable} mergeable · {summary.conflicts} conflicts"
+        f" · {summary.cleanup} cleanup · {summary.stale} stale"
+        f" · {summary.live} checked out",
+        style="dim",
+    )
+    if remotes_visible:
+        footer.append(f" · {summary.remote} remote", style="dim cyan")
+    if fetch is not None:
+        message = _fetch_message(fetch, time.time())
+        if message is not None:
+            footer.append(" · ", style="dim")
+            footer.append_text(message)
+    return footer
+
+
+def _static_dashboard(
+    root: Path,
+    branches: list[BranchStatus],
+    *,
+    base: str,
+    now: int,
+) -> Group:
     table = Table(box=None, pad_edge=False)
     table.add_column("Status", no_wrap=True)
     table.add_column("Branch", overflow="ellipsis", no_wrap=True)
@@ -310,8 +347,7 @@ def _dashboard(
     table.add_column("Last active", justify="right", no_wrap=True)
     table.add_column("Worktree", overflow="ellipsis", no_wrap=True)
 
-    visible = _visible_branches(branches, selected, height)
-    for branch in visible:
+    for branch in branches:
         activity = Text(_age(now - branch.last_commit))
         if branch.stale:
             activity.append(" stale", style="bold yellow")
@@ -338,66 +374,140 @@ def _dashboard(
             merge,
             activity,
             worktree,
-            style="reverse" if branch.name == selected else None,
         )
 
-    mergeable = sum(branch.merge in {"ff", "clean"} for branch in branches)
-    conflicts = sum(branch.merge == "conflict" for branch in branches)
-    cleanup = sum(
-        not branch.remote and branch.status in {"MERGED", "ABSORBED"}
-        for branch in branches
+    return Group(
+        _header(root, base, watch=False, remotes_visible=False, fetch_interval=None),
+        table,
+        _footer(_summary(branches), remotes_visible=False, fetch=None),
     )
-    stale = sum(branch.stale for branch in branches)
-    live = sum(branch.worktree is not None for branch in branches)
-    remote_count = sum(branch.remote for branch in branches)
-    footer = Text(
-        f"{mergeable} mergeable · {conflicts} conflicts · {cleanup} cleanup"
-        f" · {stale} stale · {live} checked out",
-        style="dim",
-    )
-    if remotes_visible:
-        footer.append(f" · {remote_count} remote", style="dim cyan")
-    if fetch is not None:
-        message = _fetch_message(fetch, time.time())
-        if message is not None:
-            footer.append(" · ", style="dim")
-            footer.append_text(message)
-
-    if not watch:
-        return Group(header, table, footer)
-
-    layout = Layout()
-    layout.split_column(
-        Layout(Group(header, table), name="content"),
-        Layout(footer, name="footer", size=1),
-    )
-    return layout
 
 
-def _render_snapshot(
+def _fit(value: str, width: int, *, right: bool = False) -> str:
+    if width <= 0:
+        return ""
+    if len(value) > width:
+        value = value[: max(0, width - 1)] + "…"
+    return value.rjust(width) if right else value.ljust(width)
+
+
+def _watch_widths(width: int) -> tuple[int, int]:
+    fixed = 8 + 1 + 5 + 1 + 6 + 1 + 8 + 1 + 11 + 1
+    available = max(16, width - fixed)
+    branch = min(40, max(16, available // 2))
+    worktree = max(0, available - branch)
+    return branch, worktree
+
+
+def _watch_table_header(width: int) -> Text:
+    branch_width, worktree_width = _watch_widths(width)
+    line = Text()
+    line.append(_fit("Status", 8), style="bold")
+    line.append(" ")
+    line.append(_fit("Branch", branch_width), style="bold")
+    line.append(" ")
+    line.append(_fit("Ahead", 5, right=True), style="bold")
+    line.append(" ")
+    line.append(_fit("Behind", 6, right=True), style="bold")
+    line.append(" ")
+    line.append(_fit("Merge", 8), style="bold")
+    line.append(" ")
+    line.append(_fit("Last active", 11, right=True), style="bold")
+    if worktree_width:
+        line.append(" ")
+        line.append(_fit("Worktree", worktree_width), style="bold")
+    return line
+
+
+def _watch_rows(branches: list[BranchStatus], now: int, width: int) -> list[Text]:
+    branch_width, worktree_width = _watch_widths(width)
+    rows: list[Text] = []
+    for branch in branches:
+        age = _age(now - branch.last_commit)
+        if branch.stale:
+            age += " stale"
+        worktree = "—"
+        if branch.worktree is not None:
+            state = "dirty" if branch.dirty else "clean"
+            worktree = f"{state} · {branch.worktree}"
+
+        row = Text()
+        row.append(_fit(branch.status, 8), style=_STATUS_STYLE[branch.status])
+        row.append(" ")
+        row.append(
+            _fit(branch.name, branch_width),
+            style="cyan" if branch.remote else "",
+        )
+        row.append(" ")
+        row.append(_fit(str(branch.ahead), 5, right=True))
+        row.append(" ")
+        row.append(_fit(str(branch.behind), 6, right=True))
+        row.append(" ")
+        merge_style = "green" if branch.merge in {"ff", "clean"} else ""
+        if branch.merge == "conflict":
+            merge_style = "bold red"
+        row.append(_fit(branch.merge, 8), style=merge_style)
+        row.append(" ")
+        age_style = "bold yellow" if branch.stale else ""
+        row.append(_fit(age, 11, right=True), style=age_style)
+        if worktree_width:
+            row.append(" ")
+            worktree_style = "dim"
+            if branch.worktree is not None:
+                worktree_style = "bold red" if branch.dirty else "cyan"
+            row.append(_fit(worktree, worktree_width), style=worktree_style)
+        rows.append(row)
+    return rows
+
+
+def _watch_layout(
     root: Path,
-    branches: list[BranchStatus],
+    rows: list[Text],
+    summary: DashboardSummary,
     *,
     base: str,
-    watch: bool = False,
-    include_remotes: bool = False,
-    fetch_interval: float | None = None,
-    fetch: FetchStatus | None = None,
-    selected: str | None = None,
-    height: int | None = None,
-) -> Group | Layout:
-    return _dashboard(
-        root,
-        branches,
-        base=base,
-        now=int(time.time()),
-        watch=watch,
-        remotes_visible=include_remotes,
-        fetch_interval=fetch_interval,
-        fetch=fetch,
-        selected=selected,
-        height=height,
+    selected_index: int,
+    width: int,
+    height: int,
+    remotes_visible: bool,
+    fetch_interval: float | None,
+    fetch: FetchStatus,
+) -> Layout:
+    limit = max(1, height - 3)
+    if len(rows) <= limit:
+        start = 0
+    else:
+        start = max(0, min(selected_index - limit // 2, len(rows) - limit))
+
+    visible: list[Text] = []
+    for index in range(start, min(start + limit, len(rows))):
+        row = rows[index]
+        if index == selected_index:
+            row = row.copy()
+            row.stylize("reverse")
+        visible.append(row)
+
+    content = Group(
+        _header(
+            root,
+            base,
+            watch=True,
+            remotes_visible=remotes_visible,
+            fetch_interval=fetch_interval,
+        ),
+        _watch_table_header(width),
+        *visible,
     )
+    layout = Layout()
+    layout.split_column(
+        Layout(content, name="content"),
+        Layout(
+            _footer(summary, remotes_visible=remotes_visible, fetch=fetch),
+            name="footer",
+            size=1,
+        ),
+    )
+    return layout
 
 
 def _snapshot(
@@ -405,30 +515,14 @@ def _snapshot(
     *,
     base: str,
     stale_days: int,
-    watch: bool = False,
     include_remotes: bool = False,
-    fetch_interval: float | None = None,
-    fetch: FetchStatus | None = None,
-    selected: str | None = None,
-    height: int | None = None,
-) -> tuple[Path, list[BranchStatus], Group | Layout]:
-    root, branches = collect_branch_status(
+) -> tuple[Path, list[BranchStatus]]:
+    return collect_branch_status(
         path,
         base=base,
         stale_days=stale_days,
         now=int(time.time()),
         include_remotes=include_remotes,
-    )
-    return root, branches, _render_snapshot(
-        root,
-        branches,
-        base=base,
-        watch=watch,
-        include_remotes=include_remotes,
-        fetch_interval=fetch_interval,
-        fetch=fetch,
-        selected=selected,
-        height=height,
     )
 
 
@@ -532,111 +626,64 @@ def print_branch_status(
         raise SystemExit("--interval requires --watch")
 
     console = Console()
+    root, branches = _snapshot(
+        path,
+        base=base,
+        stale_days=stale_days,
+        include_remotes=watch and interval is not None,
+    )
     if not watch:
-        _, _, snapshot = _snapshot(path, base=base, stale_days=stale_days)
-        console.print(snapshot)
+        console.print(
+            _static_dashboard(root, branches, base=base, now=int(time.time()))
+        )
         return
 
     fetch = FetchStatus()
     include_remotes = interval is not None
-    root, branches, snapshot = _snapshot(
-        path,
-        base=base,
-        stale_days=stale_days,
-        watch=True,
-        include_remotes=include_remotes,
-        fetch_interval=interval,
-        fetch=fetch,
-        height=console.height,
-    )
-    selected = branches[0].name if branches else None
-    snapshot = _render_snapshot(
-        root,
-        branches,
-        base=base,
-        watch=True,
-        include_remotes=include_remotes,
-        fetch_interval=interval,
-        fetch=fetch,
-        selected=selected,
-        height=console.height,
-    )
+    selected_index = 0
+    rows = _watch_rows(branches, int(time.time()), console.width)
+    summary = _summary(branches)
 
     last_fetch = time.monotonic()
     if interval is not None:
         _start_fetch(root, fetch)
-        snapshot = _render_snapshot(
-            root,
-            branches,
-            base=base,
-            watch=True,
-            include_remotes=include_remotes,
-            fetch_interval=interval,
-            fetch=fetch,
-            selected=selected,
-            height=console.height,
-        )
     next_refresh = time.monotonic() + _WATCH_REFRESH_SECONDS
 
+    def render() -> Layout:
+        return _watch_layout(
+            root,
+            rows,
+            summary,
+            base=base,
+            selected_index=selected_index,
+            width=console.width,
+            height=console.height,
+            remotes_visible=include_remotes,
+            fetch_interval=interval,
+            fetch=fetch,
+        )
+
     with _watch_terminal(console) as fd:
-        with Live(snapshot, console=console, screen=True, auto_refresh=False) as live:
+        with Live(render(), console=console, screen=True, auto_refresh=False) as live:
             try:
                 while True:
                     key = _watch_key(fd, _WATCH_POLL_SECONDS)
                     if key == "q":
                         return
-                    if key == "up":
-                        selected = _move_selection(branches, selected, -1)
-                        live.update(
-                            _render_snapshot(
-                                root,
-                                branches,
-                                base=base,
-                                watch=True,
-                                include_remotes=include_remotes,
-                                fetch_interval=interval,
-                                fetch=fetch,
-                                selected=selected,
-                                height=console.height,
-                            ),
-                            refresh=True,
+                    if key in {"up", "down"}:
+                        delta = -1 if key == "up" else 1
+                        selected_index = (
+                            max(0, min(len(branches) - 1, selected_index + delta))
+                            if branches
+                            else 0
                         )
-                        continue
-                    if key == "down":
-                        selected = _move_selection(branches, selected, 1)
-                        live.update(
-                            _render_snapshot(
-                                root,
-                                branches,
-                                base=base,
-                                watch=True,
-                                include_remotes=include_remotes,
-                                fetch_interval=interval,
-                                fetch=fetch,
-                                selected=selected,
-                                height=console.height,
-                            ),
-                            refresh=True,
-                        )
+                        live.update(render(), refresh=True)
                         continue
                     if key == "g":
                         include_remotes = True
                         if _start_fetch(root, fetch):
                             last_fetch = time.monotonic()
-                        live.update(
-                            _render_snapshot(
-                                root,
-                                branches,
-                                base=base,
-                                watch=True,
-                                include_remotes=include_remotes,
-                                fetch_interval=interval,
-                                fetch=fetch,
-                                selected=selected,
-                                height=console.height,
-                            ),
-                            refresh=True,
-                        )
+                        live.update(render(), refresh=True)
                         continue
 
                     now = time.monotonic()
@@ -650,50 +697,23 @@ def print_branch_status(
                     ):
                         _start_fetch(root, fetch)
                         last_fetch = now
-                        live.update(
-                            _render_snapshot(
-                                root,
-                                branches,
-                                base=base,
-                                watch=True,
-                                include_remotes=include_remotes,
-                                fetch_interval=interval,
-                                fetch=fetch,
-                                selected=selected,
-                                height=console.height,
-                            ),
-                            refresh=True,
-                        )
+                        live.update(render(), refresh=True)
                         continue
 
                     if not fetch_changed and now < next_refresh:
                         continue
 
-                    root, branches = collect_branch_status(
+                    selected_name = branches[selected_index].name if branches else None
+                    root, branches = _snapshot(
                         path,
                         base=base,
                         stale_days=stale_days,
-                        now=int(time.time()),
                         include_remotes=include_remotes,
                     )
-                    if branches:
-                        selected = branches[_selected_index(branches, selected)].name
-                    else:
-                        selected = None
-                    live.update(
-                        _render_snapshot(
-                            root,
-                            branches,
-                            base=base,
-                            watch=True,
-                            include_remotes=include_remotes,
-                            fetch_interval=interval,
-                            fetch=fetch,
-                            selected=selected,
-                            height=console.height,
-                        ),
-                        refresh=True,
-                    )
+                    selected_index = _selected_index(branches, selected_name)
+                    rows = _watch_rows(branches, int(time.time()), console.width)
+                    summary = _summary(branches)
+                    live.update(render(), refresh=True)
                     next_refresh = now + _WATCH_REFRESH_SECONDS
             except KeyboardInterrupt:
                 return
