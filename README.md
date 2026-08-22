@@ -72,6 +72,7 @@ uv run nate-git-extras status --watch --interval 30
 
 `status` evaluates the refs currently in the repository and shows:
 
+- `BASE`: the comparison base itself, always shown as the first row
 - `READY`: the branch tip can fast-forward or merge cleanly into the base
 - `CONFLICT`: a trial merge reports conflicts
 - `MERGED`: the branch is already contained in the base
@@ -79,9 +80,11 @@ uv run nate-git-extras status --watch --interval 30
 - ahead/behind counts, tip activity age, stale branches, and checked-out/dirty
   worktrees
 
-Rows are sorted with local branches first, then remote refs, with the most recently
-active branch first within each group. A remote tracking ref that is identical to its
-local branch is omitted; remote-only or diverged remote refs remain visible.
+The base row comes first. Remaining rows are sorted with local branches first, then
+remote refs, with the most recently active branch first within each group. A remote
+tracking ref that is identical to its local branch is omitted; remote-only or diverged
+remote refs remain visible. This means a changed `origin/master` appears separately
+from the local `master` base row after a remote refresh.
 
 By default, only local branches are displayed and `status` does not access the
 network. In `--watch` mode, press `g` to run one asynchronous `git fetch --all --prune`
