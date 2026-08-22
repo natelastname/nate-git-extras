@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console, Group
+from rich.layout import Layout
 from rich.live import Live
 from rich.table import Table
 from rich.text import Text
@@ -209,7 +210,7 @@ def _dashboard(
     base: str,
     now: int,
     watch_interval: float | None = None,
-) -> Group:
+) -> Group | Layout:
     header = Text.assemble(
         ("Branch status", "bold"),
         ("  base ", "dim"),
@@ -278,7 +279,15 @@ def _dashboard(
         f" · {stale} stale · {live} checked out",
         style="dim",
     )
-    return Group(header, table, footer)
+    if watch_interval is None:
+        return Group(header, table, footer)
+
+    layout = Layout()
+    layout.split_column(
+        Layout(Group(header, table), name="content"),
+        Layout(footer, name="footer", size=1),
+    )
+    return layout
 
 
 def _snapshot(
@@ -287,7 +296,7 @@ def _snapshot(
     base: str,
     stale_days: int,
     watch_interval: float | None = None,
-) -> Group:
+) -> Group | Layout:
     now = int(time.time())
     root, branches = collect_branch_status(
         path, base=base, stale_days=stale_days, now=now

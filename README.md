@@ -81,9 +81,9 @@ refs currently in the repository and shows:
   worktrees
 
 `--watch` uses the terminal's alternate screen, so the dashboard starts at the top of
-the terminal and occupies the screen without scrolling your shell history. Press `q`
-or `Ctrl-C` to exit and return to the previous terminal contents. Watch mode remains
-read-only.
+the terminal and occupies the screen without scrolling your shell history. The
+summary line is pinned to the bottom of the screen. Press `q` or `Ctrl-C` to exit and
+return to the previous terminal contents. Watch mode remains read-only.
 
 Cyclopts provides command-specific help:
 
