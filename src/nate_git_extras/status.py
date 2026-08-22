@@ -7,6 +7,7 @@ import select
 import subprocess
 import sys
 import termios
+import threading
 import time
 import tty
 from collections.abc import Iterator
@@ -28,7 +29,7 @@ _STATUS_STYLE = {
     "MERGED": "green",
     "ABSORBED": "cyan",
 }
-_WATCH_POLL_SECONDS = 0.05
+_WATCH_POLL_SECONDS = 0.01
 _WATCH_REFRESH_SECONDS = 2.0
 
 
@@ -52,6 +53,13 @@ class FetchStatus:
     state: str = "idle"
     detail: str = ""
     finished_at: float | None = None
+
+
+@dataclass(slots=True)
+class ScanStatus:
+    thread: threading.Thread | None = None
+    result: tuple[Path, list[BranchStatus]] | None = None
+    error: BaseException | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +322,7 @@ def _footer(
     *,
     remotes_visible: bool,
     fetch: FetchStatus | None,
+    refreshing: bool = False,
 ) -> Text:
     footer = Text(
         f"{summary.mergeable} mergeable · {summary.conflicts} conflicts"
@@ -323,6 +332,8 @@ def _footer(
     )
     if remotes_visible:
         footer.append(f" · {summary.remote} remote", style="dim cyan")
+    if refreshing:
+        footer.append(" · refreshing…", style="dim yellow")
     if fetch is not None:
         message = _fetch_message(fetch, time.time())
         if message is not None:
@@ -472,6 +483,7 @@ def _watch_layout(
     remotes_visible: bool,
     fetch_interval: float | None,
     fetch: FetchStatus,
+    refreshing: bool,
 ) -> Layout:
     limit = max(1, height - 3)
     if len(rows) <= limit:
@@ -502,7 +514,12 @@ def _watch_layout(
     layout.split_column(
         Layout(content, name="content"),
         Layout(
-            _footer(summary, remotes_visible=remotes_visible, fetch=fetch),
+            _footer(
+                summary,
+                remotes_visible=remotes_visible,
+                fetch=fetch,
+                refreshing=refreshing,
+            ),
             name="footer",
             size=1,
         ),
@@ -524,6 +541,53 @@ def _snapshot(
         now=int(time.time()),
         include_remotes=include_remotes,
     )
+
+
+def _start_scan(
+    path: Path,
+    *,
+    base: str,
+    stale_days: int,
+    include_remotes: bool,
+    scan: ScanStatus,
+) -> bool:
+    if scan.thread is not None:
+        return False
+
+    scan.result = None
+    scan.error = None
+
+    def run() -> None:
+        try:
+            scan.result = _snapshot(
+                path,
+                base=base,
+                stale_days=stale_days,
+                include_remotes=include_remotes,
+            )
+        except BaseException as exc:
+            scan.error = exc
+
+    scan.thread = threading.Thread(target=run, daemon=True)
+    scan.thread.start()
+    return True
+
+
+def _poll_scan(scan: ScanStatus) -> tuple[Path, list[BranchStatus]] | None:
+    thread = scan.thread
+    if thread is None or thread.is_alive():
+        return None
+
+    thread.join()
+    scan.thread = None
+    if scan.error is not None:
+        error = scan.error
+        scan.error = None
+        raise error
+
+    result = scan.result
+    scan.result = None
+    return result
 
 
 @contextmanager
@@ -551,7 +615,7 @@ def _watch_key(fd: int, timeout: float) -> str | None:
 
     sequence = first
     for _ in range(2):
-        readable, _, _ = select.select([fd], [], [], 0.005)
+        readable, _, _ = select.select([fd], [], [], 0.002)
         if not readable:
             break
         sequence += os.read(fd, 1)
@@ -639,6 +703,7 @@ def print_branch_status(
         return
 
     fetch = FetchStatus()
+    scan = ScanStatus()
     include_remotes = interval is not None
     selected_index = 0
     rows = _watch_rows(branches, int(time.time()), console.width)
@@ -647,7 +712,7 @@ def print_branch_status(
     last_fetch = time.monotonic()
     if interval is not None:
         _start_fetch(root, fetch)
-    next_refresh = time.monotonic() + _WATCH_REFRESH_SECONDS
+    next_scan = time.monotonic() + _WATCH_REFRESH_SECONDS
 
     def render() -> Layout:
         return _watch_layout(
@@ -661,6 +726,7 @@ def print_branch_status(
             remotes_visible=include_remotes,
             fetch_interval=interval,
             fetch=fetch,
+            refreshing=scan.thread is not None,
         )
 
     with _watch_terminal(console) as fd:
@@ -690,6 +756,21 @@ def print_branch_status(
                     fetch_changed = _poll_fetch(fetch)
                     if fetch_changed:
                         last_fetch = now
+                        next_scan = 0.0
+
+                    scan_result = _poll_scan(scan)
+                    if scan_result is not None:
+                        selected_name = (
+                            branches[selected_index].name if branches else None
+                        )
+                        root, branches = scan_result
+                        selected_index = _selected_index(branches, selected_name)
+                        rows = _watch_rows(branches, int(time.time()), console.width)
+                        summary = _summary(branches)
+                        next_scan = now + _WATCH_REFRESH_SECONDS
+                        live.update(render(), refresh=True)
+                        continue
+
                     if (
                         interval is not None
                         and fetch.process is None
@@ -700,21 +781,20 @@ def print_branch_status(
                         live.update(render(), refresh=True)
                         continue
 
-                    if not fetch_changed and now < next_refresh:
-                        continue
-
-                    selected_name = branches[selected_index].name if branches else None
-                    root, branches = _snapshot(
-                        path,
-                        base=base,
-                        stale_days=stale_days,
-                        include_remotes=include_remotes,
-                    )
-                    selected_index = _selected_index(branches, selected_name)
-                    rows = _watch_rows(branches, int(time.time()), console.width)
-                    summary = _summary(branches)
-                    live.update(render(), refresh=True)
-                    next_refresh = now + _WATCH_REFRESH_SECONDS
+                    if (
+                        fetch.process is None
+                        and scan.thread is None
+                        and now >= next_scan
+                    ):
+                        _start_scan(
+                            path,
+                            base=base,
+                            stale_days=stale_days,
+                            include_remotes=include_remotes,
+                            scan=scan,
+                        )
+                        next_scan = now + _WATCH_REFRESH_SECONDS
+                        live.update(render(), refresh=True)
             except KeyboardInterrupt:
                 return
             finally:
