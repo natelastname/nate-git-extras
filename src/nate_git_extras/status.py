@@ -24,6 +24,7 @@ from rich.text import Text
 from .git_utils import find_git_root
 
 _STATUS_STYLE = {
+    "BASE": "bold cyan",
     "READY": "bold green",
     "CONFLICT": "bold red",
     "MERGED": "green",
@@ -202,16 +203,16 @@ def collect_branch_status(
     current_time = int(time.time()) if now is None else now
     branches: list[BranchStatus] = []
     for name, last_commit, remote in _refs(root, include_remotes=include_remotes):
-        if name == base:
-            continue
-
-        ahead, behind = _ahead_behind(root, base, name)
+        is_base = name == base
+        ahead, behind = (0, 0) if is_base else _ahead_behind(root, base, name)
         worktree = None if remote else checked_out.get(name)
         dirty = worktree is not None and bool(
             _git(worktree, "status", "--porcelain=v1").stdout
         )
 
-        if ahead == 0:
+        if is_base:
+            status, merge = "BASE", "—"
+        elif ahead == 0:
             status, merge = "MERGED", "—"
         elif behind > 0 and _absorbed(root, base, name):
             status, merge = "ABSORBED", "—"
@@ -234,7 +235,14 @@ def collect_branch_status(
             )
         )
 
-    branches.sort(key=lambda branch: (branch.remote, -branch.last_commit, branch.name))
+    branches.sort(
+        key=lambda branch: (
+            branch.status != "BASE",
+            branch.remote,
+            -branch.last_commit,
+            branch.name,
+        )
+    )
     return root, branches
 
 
