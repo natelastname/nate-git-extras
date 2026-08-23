@@ -1,4 +1,4 @@
-"""Read-only branch status dashboard."""
+"""Branch merge and cleanup dashboard."""
 
 from __future__ import annotations
 
@@ -256,17 +256,11 @@ def _split_branches(
     return local, remote
 
 
-def _age(seconds: int) -> str:
-    minutes = max(0, seconds) // 60
-    if minutes < 1:
-        return "<1m"
-    if minutes < 60:
-        return f"{minutes}m"
-    hours = minutes // 60
-    if hours < 48:
-        return f"{hours}h"
-    days = hours // 24
-    return f"{days}d" if days < 60 else f"{days // 30}mo"
+def _base_branch(branches: list[BranchStatus]) -> BranchStatus | None:
+    for branch in branches:
+        if branch.status == "BASE" and not branch.remote:
+            return branch
+    return None
 
 
 def _selected_index(branches: list[BranchStatus], selected: str | None) -> int:
@@ -286,6 +280,19 @@ def _move_selection(
     index = _selected_index(branches, selected)
     index = max(0, min(len(branches) - 1, index + delta))
     return branches[index].name
+
+
+def _age(seconds: int) -> str:
+    minutes = max(0, seconds) // 60
+    if minutes < 1:
+        return "<1m"
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours}h"
+    days = hours // 24
+    return f"{days}d" if days < 60 else f"{days // 30}mo"
 
 
 def _summary(branches: list[BranchStatus]) -> DashboardSummary:
@@ -328,7 +335,10 @@ def _header(
         (str(root), "dim"),
     )
     if watch:
-        header.append("  ↑/↓ select · g fetch remotes · q / Ctrl-C stop", style="dim")
+        header.append(
+            "  ↑/↓ select · m merge · g fetch remotes · q / Ctrl-C stop",
+            style="dim",
+        )
         if remotes_visible:
             header.append(" · remote snapshot shown", style="cyan")
         if fetch_interval is not None:
@@ -342,6 +352,7 @@ def _footer(
     remotes_visible: bool,
     fetch: FetchStatus | None,
     refreshing_remotes: bool = False,
+    notice: Text | None = None,
 ) -> Text:
     footer = Text(
         f"{summary.mergeable} mergeable · {summary.conflicts} conflicts"
@@ -358,6 +369,9 @@ def _footer(
         if message is not None:
             footer.append(" · ", style="dim")
             footer.append_text(message)
+    if notice is not None:
+        footer.append(" · ", style="dim")
+        footer.append_text(notice)
     return footer
 
 
@@ -503,6 +517,7 @@ def _watch_layout(
     fetch_interval: float | None,
     fetch: FetchStatus,
     refreshing_remotes: bool,
+    notice: Text | None,
 ) -> Layout:
     limit = max(1, height - 3)
     if len(rows) <= limit:
@@ -538,6 +553,7 @@ def _watch_layout(
                 remotes_visible=remotes_visible,
                 fetch=fetch,
                 refreshing_remotes=refreshing_remotes,
+                notice=notice,
             ),
             name="footer",
             size=1,
@@ -696,6 +712,48 @@ def _stop_fetch(fetch: FetchStatus) -> None:
     fetch.process = None
 
 
+def _merge_branch(base_branch: BranchStatus | None, branch: BranchStatus) -> tuple[bool, str]:
+    if branch.status != "READY":
+        return False, f"merge blocked: {branch.name} is {branch.status.lower()}"
+    if base_branch is None or base_branch.worktree is None:
+        return False, "merge blocked: base is not checked out in a worktree"
+
+    worktree = base_branch.worktree
+    current = _git(worktree, "branch", "--show-current").stdout.strip()
+    if current != base_branch.name:
+        return False, f"merge blocked: {base_branch.name} is no longer checked out"
+    if _git(worktree, "status", "--porcelain=v1").stdout:
+        return False, "merge blocked: base worktree is dirty"
+
+    ahead, behind = _ahead_behind(worktree, base_branch.name, branch.name)
+    if ahead == 0:
+        return False, f"merge blocked: {branch.name} is already contained in {base_branch.name}"
+    if behind > 0 and _absorbed(worktree, base_branch.name, branch.name):
+        return False, f"merge blocked: {branch.name} is already absorbed"
+
+    merge = _mergeability(worktree, base_branch.name, branch.name, behind)
+    if merge == "conflict":
+        return False, f"merge blocked: {branch.name} no longer merges cleanly"
+
+    args = ("merge", "--ff-only", branch.name) if merge == "ff" else (
+        "merge",
+        "--no-edit",
+        branch.name,
+    )
+    result = _git(worktree, *args, check=False)
+    if result.returncode == 0:
+        return True, f"merged {branch.name} → {base_branch.name}"
+
+    if (
+        _git(worktree, "rev-parse", "--verify", "--quiet", "MERGE_HEAD", check=False).returncode
+        == 0
+    ):
+        _git(worktree, "merge", "--abort", check=False)
+    lines = (result.stderr.strip() or result.stdout.strip()).splitlines()
+    detail = lines[-1] if lines else "git merge failed"
+    return False, f"merge failed: {detail}"
+
+
 def print_branch_status(
     path: Path = Path("."),
     *,
@@ -727,6 +785,8 @@ def print_branch_status(
     remote_branches: list[BranchStatus] = []
     remotes_loaded = False
     remote_scan_pending = False
+    pending_merge: str | None = None
+    notice: Text | None = None
     branches = local_branches
     selected_index = 0
     rows = _watch_rows(branches, int(time.time()), console.width)
@@ -737,9 +797,10 @@ def print_branch_status(
         _start_fetch(root, fetch)
     next_scan = time.monotonic() + _WATCH_REFRESH_SECONDS
 
-    def rebuild() -> None:
+    def rebuild(selected_name: str | None = None) -> None:
         nonlocal branches, rows, summary, selected_index
-        selected_name = branches[selected_index].name if branches else None
+        if selected_name is None and branches:
+            selected_name = branches[selected_index].name
         branches = [*local_branches, *remote_branches]
         selected_index = _selected_index(branches, selected_name)
         rows = _watch_rows(branches, int(time.time()), console.width)
@@ -759,6 +820,7 @@ def print_branch_status(
             fetch_interval=interval,
             fetch=fetch,
             refreshing_remotes=refreshing_remotes,
+            notice=notice,
         )
 
     with _watch_terminal(console) as fd:
@@ -768,6 +830,44 @@ def print_branch_status(
                     key = _watch_key(fd, _WATCH_POLL_SECONDS)
                     if key == "q":
                         return
+
+                    if pending_merge is not None and key is not None:
+                        if key != "y":
+                            pending_merge = None
+                            notice = Text("merge cancelled", style="dim")
+                            live.update(render(), refresh=True)
+                            continue
+
+                        target = next(
+                            (branch for branch in branches if branch.name == pending_merge),
+                            None,
+                        )
+                        pending_merge = None
+                        if target is None:
+                            notice = Text("merge blocked: branch disappeared", style="bold red")
+                            live.update(render(), refresh=True)
+                            continue
+
+                        notice = Text(f"merging {target.name} → {base}…", style="bold yellow")
+                        live.update(render(), refresh=True)
+                        ok, message = _merge_branch(_base_branch(branches), target)
+                        notice = Text(message, style="green" if ok else "bold red")
+                        if ok:
+                            selected_name = target.name
+                            root, scanned = _snapshot(
+                                path,
+                                base=base,
+                                stale_days=stale_days,
+                                include_remotes=remotes_loaded,
+                            )
+                            local_branches, scanned_remote = _split_branches(scanned)
+                            if remotes_loaded:
+                                remote_branches = scanned_remote
+                            rebuild(selected_name)
+                            next_scan = time.monotonic() + _WATCH_REFRESH_SECONDS
+                        live.update(render(), refresh=True)
+                        continue
+
                     if key in {"up", "down"}:
                         delta = -1 if key == "up" else 1
                         selected_index = (
@@ -777,9 +877,41 @@ def print_branch_status(
                         )
                         live.update(render(), refresh=True)
                         continue
+
+                    if key == "m":
+                        if fetch.process is not None or scan.thread is not None or remote_scan_pending:
+                            notice = Text("merge blocked: refresh in progress", style="bold red")
+                        elif not branches:
+                            notice = Text("merge blocked: no branch selected", style="bold red")
+                        else:
+                            target = branches[selected_index]
+                            base_branch = _base_branch(branches)
+                            if target.status != "READY":
+                                notice = Text(
+                                    f"merge blocked: {target.name} is {target.status.lower()}",
+                                    style="bold red",
+                                )
+                            elif base_branch is None or base_branch.worktree is None:
+                                notice = Text(
+                                    "merge blocked: base is not checked out in a worktree",
+                                    style="bold red",
+                                )
+                            elif base_branch.dirty:
+                                notice = Text("merge blocked: base worktree is dirty", style="bold red")
+                            else:
+                                pending_merge = target.name
+                                notice = Text(
+                                    f"merge {target.name} → {base}? y/N",
+                                    style="bold yellow",
+                                )
+                        live.update(render(), refresh=True)
+                        continue
+
                     if key == "g":
+                        pending_merge = None
                         if _start_fetch(root, fetch):
                             last_fetch = time.monotonic()
+                            notice = None
                         live.update(render(), refresh=True)
                         continue
 
@@ -812,7 +944,8 @@ def print_branch_status(
                         continue
 
                     if (
-                        interval is not None
+                        pending_merge is None
+                        and interval is not None
                         and fetch.process is None
                         and not remote_scan_pending
                         and now - last_fetch >= interval
@@ -823,7 +956,8 @@ def print_branch_status(
                         continue
 
                     if (
-                        remote_scan_pending
+                        pending_merge is None
+                        and remote_scan_pending
                         and fetch.process is None
                         and scan.thread is None
                     ):
@@ -838,7 +972,8 @@ def print_branch_status(
                         continue
 
                     if (
-                        fetch.process is None
+                        pending_merge is None
+                        and fetch.process is None
                         and scan.thread is None
                         and not remote_scan_pending
                         and now >= next_scan

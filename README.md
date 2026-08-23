@@ -20,7 +20,7 @@ The current subcommands are:
 
 - `cp`: copy files or directories while respecting Git ignore rules
 - `ls`: print a tree-style directory listing
-- `status`: show a read-only branch merge/cleanup dashboard
+- `status`: show a branch merge/cleanup dashboard
 
 ### Copy
 
@@ -96,11 +96,18 @@ remote snapshot automatically every N seconds.
 The bottom status line distinguishes `fetching…` from the one-time remote status
 calculation and reports `fetch ok` or a persistent fetch failure message.
 
+In watch mode, use the up/down arrow keys to select a row and press `m` to merge a
+`READY` branch into the base. The dashboard asks for a single-key `y/N` confirmation.
+Fast-forwardable branches use `git merge --ff-only`; other clean merges use
+`git merge --no-edit`. The base must be checked out in a clean worktree, and the
+mergeability is revalidated immediately before Git changes the base. Remote-only rows
+can be merged from their fetched remote-tracking ref. Merge success or failure is
+reported in the bottom status line and the dashboard is refreshed immediately.
+
 `--watch` uses the terminal's alternate screen, so the dashboard starts at the top of
 the terminal and occupies the screen without scrolling your shell history. The
-summary line is pinned to the bottom of the screen. Use the up/down arrow keys to move
-the highlighted row; the table scrolls to keep the selection visible. Press `q` or
-`Ctrl-C` to exit and return to the previous terminal contents.
+summary line is pinned to the bottom of the screen. Press `q` or `Ctrl-C` to exit and
+return to the previous terminal contents.
 
 Cyclopts provides command-specific help:
 

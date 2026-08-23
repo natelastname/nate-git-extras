@@ -249,7 +249,10 @@ def test_status_sorts_local_then_remote_by_activity(tmp_path: Path) -> None:
     repo.mkdir()
     init_git_repo(repo)
 
-    for name, date in [("local-old", "2020-01-01T00:00:00+00:00"), ("local-new", "2021-01-01T00:00:00+00:00")]:
+    for name, date in [
+        ("local-old", "2020-01-01T00:00:00+00:00"),
+        ("local-new", "2021-01-01T00:00:00+00:00"),
+    ]:
         run_git(repo, "switch", "-c", name)
         run_git(
             repo,
@@ -280,8 +283,13 @@ def test_status_sorts_local_then_remote_by_activity(tmp_path: Path) -> None:
     _, local_only = status_module.collect_branch_status(repo)
     _, with_remotes = status_module.collect_branch_status(repo, include_remotes=True)
 
-    assert [branch.name for branch in local_only] == ["local-new", "local-old"]
+    assert [branch.name for branch in local_only] == [
+        "master",
+        "local-new",
+        "local-old",
+    ]
     assert [branch.name for branch in with_remotes] == [
+        "master",
         "local-new",
         "local-old",
         "origin/remote-only",
