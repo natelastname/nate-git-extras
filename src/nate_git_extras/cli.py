@@ -114,8 +114,8 @@ def status(
     stale_days:
         Mark branches whose tip has not moved in this many days as stale.
     watch:
-        Continuously refresh the dashboard until q or Ctrl-C. Press g to fetch
-        and display remote branches.
+        Continuously refresh until q or Ctrl-C. Use arrows to select, m to merge
+        a READY branch, and g to fetch/display remote branches.
     interval:
         In watch mode, automatically fetch remotes every this many seconds.
     """
