@@ -57,6 +57,9 @@ uv run nate-git-extras ls --traverse-ignored
 # Compare local branches with master
 uv run nate-git-extras status
 
+# Fetch first, then print one remote-aware snapshot
+uv run nate-git-extras status --fetch
+
 # Inspect another repository or base branch
 uv run nate-git-extras status /path/to/repo --base main
 
@@ -87,8 +90,13 @@ remote refs remain visible. This means a changed `origin/master` appears separat
 from the local `master` base row after a remote refresh.
 
 By default, only local branches are displayed and `status` does not access the
-network. In `--watch` mode, press `g` to run one asynchronous `git fetch --all --prune`
-and take one snapshot of the remote branches. Those remote rows remain frozen while
+network. `status --fetch` runs one `git fetch --all --prune` before printing anything,
+then prints one remote-aware snapshot and exits. If the fetch fails, the command exits
+with the fetch error instead of printing stale remote information. `--fetch` is the
+non-interactive counterpart to the watch-mode remote controls.
+
+In `--watch` mode, press `g` to run one asynchronous `git fetch --all --prune` and
+take one snapshot of the remote branches. Those remote rows remain frozen while
 normal watch refreshes continue to update local branches only. Press `g` again to
 refresh the remote snapshot. Passing `--interval N` instead fetches and refreshes the
 remote snapshot automatically every N seconds.
