@@ -6,6 +6,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from rich.console import Console
+from rich.text import Text
+
 from .git_utils import find_git_root
 
 
@@ -185,6 +188,90 @@ def format_branches(listing: BranchListing) -> str:
     return "\n".join(lines)
 
 
-def print_branches(path: Path, *, fetch: bool = False) -> None:
+def render_branches(listing: BranchListing) -> Text:
+    output = Text()
+    first_line = True
+
+    def add_line(*parts: tuple[str, str | None]) -> None:
+        nonlocal first_line
+        if not first_line:
+            output.append("\n")
+        first_line = False
+        for value, style in parts:
+            output.append(value, style=style)
+
+    add_line(("Local branches", "bold"))
+    if listing.local:
+        for branch in listing.local:
+            branch_style = "bold green" if branch.current else "cyan"
+            marker = "*" if branch.current else " "
+            parts: list[tuple[str, str | None]] = [
+                (f"  {marker} ", branch_style),
+                (branch.name, branch_style),
+            ]
+            if branch.upstream is not None:
+                parts.extend(
+                    [
+                        (" -> ", "dim"),
+                        (branch.upstream, "magenta"),
+                    ]
+                )
+            add_line(*parts)
+    else:
+        add_line(("  (none)", "dim"))
+
+    add_line(("", None))
+    add_line(("Remote branches", "bold"))
+    if listing.remote:
+        width = max(len(branch.name) for branch in listing.remote)
+        for branch in listing.remote:
+            status_style = "green" if branch.tracked_by else "yellow"
+            add_line(
+                ("    ", None),
+                (f"{branch.name:<{width}}", "magenta"),
+                ("  ", None),
+                (_remote_status(branch), status_style),
+            )
+    else:
+        add_line(("  (none)", "dim"))
+
+    add_line(("", None))
+    add_line(("Remote defaults", "bold"))
+    if listing.remote_defaults:
+        for default in listing.remote_defaults:
+            add_line(
+                ("    ", None),
+                (default.name, "magenta"),
+                (" -> ", "dim"),
+                (default.target, "magenta"),
+            )
+    else:
+        add_line(("  (none)", "dim"))
+
+    return output
+
+
+def _should_page(console: Console, output: Text) -> bool:
+    if not console.is_terminal:
+        return False
+    rendered_lines = console.render_lines(output, console.options, pad=False)
+    return len(rendered_lines) > max(console.height - 1, 1)
+
+
+def print_branches(
+    path: Path,
+    *,
+    fetch: bool = False,
+    pager: bool = True,
+    color: bool = True,
+) -> None:
     listing = collect_branches(path, fetch=fetch)
-    print(format_branches(listing))
+    output = render_branches(listing)
+    console = Console() if color else Console(color_system=None)
+
+    if pager and _should_page(console, output):
+        with console.pager(styles=color):
+            console.print(output)
+        return
+
+    console.print(output)
