@@ -11,6 +11,7 @@ from cyclopts import App, Parameter
 from loguru import logger
 from rich.console import Console
 
+from .commit_detail import print_commit_detail
 from .cp import git_cp_many, git_cp_template
 from .git_utils import find_git_root
 from .ls import print_tree
@@ -158,7 +159,9 @@ def status(
     """
     if fetch:
         if watch:
-            raise SystemExit("--fetch cannot be combined with --watch; use g or --interval")
+            raise SystemExit(
+                "--fetch cannot be combined with --watch; use g or --interval"
+            )
         if interval is not None:
             raise SystemExit("--fetch cannot be combined with --interval")
         _print_fetched_status(path, base=base, stale_days=stale_days)
@@ -182,6 +185,7 @@ def recent(
     watch: bool = False,
     interval: float | None = None,
     fetch: bool = False,
+    base: str = "master",
 ) -> None:
     """Show a feed of the most recent commits across branches.
 
@@ -192,13 +196,15 @@ def recent(
     limit:
         Maximum number of commits to display.
     watch:
-        Continuously refresh until q or Ctrl-C. Use arrows to select and g to
-        fetch/display remote commits.
+        Continuously refresh until q or Ctrl-C. Use arrows to select, Enter to
+        inspect a commit, and g to fetch/display remote commits.
     interval:
         In watch mode, automatically fetch remotes every this many seconds.
     fetch:
         Fetch remotes once before the first snapshot. In watch mode this seeds
         the initial remote snapshot without enabling periodic fetching.
+    base:
+        Base ref used by the per-commit detail view.
     """
     print_recent_commits(
         path,
@@ -206,4 +212,27 @@ def recent(
         watch=watch,
         interval=interval,
         fetch_first=fetch,
+        base=base,
     )
+
+
+@app.command
+def show(
+    revision: str,
+    path: Path = Path("."),
+    /,
+    *,
+    base: str = "master",
+) -> None:
+    """Show detailed information for one commit.
+
+    Parameters
+    ----------
+    revision:
+        Commit SHA or other commit-ish.
+    path:
+        Repository path.
+    base:
+        Base ref used to report whether the commit has been incorporated.
+    """
+    print_commit_detail(path, revision, base=base)
