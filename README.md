@@ -59,7 +59,17 @@ uv run nate-git-extras branches
 
 # Refresh remote-tracking refs first
 uv run nate-git-extras branches --fetch
+
+# Disable automatic paging or terminal colors when needed
+uv run nate-git-extras branches --no-pager
+uv run nate-git-extras branches --no-color
 ```
+
+Branch output is colorized on terminals: the current branch is green, other local
+branches are cyan, remote refs are magenta, tracked status is green, and remote-only
+or untracked status is yellow. If the rendered output is taller than the terminal,
+it is automatically sent through the system pager. Piped output is never paged and
+Rich automatically suppresses terminal color codes when stdout is not a terminal.
 
 Example output:
 
