@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +38,14 @@ class RecentCommit:
     branch: str
     summary: str
     remote: bool = False
+
+
+@dataclass(slots=True)
+class ScanStatus:
+    thread: threading.Thread | None = None
+    result: tuple[Path, list[RecentCommit]] | None = None
+    error: BaseException | None = None
+    include_remotes: bool = False
 
 
 def _git(
@@ -140,15 +148,10 @@ def _static_dashboard(root: Path, commits: list[RecentCommit], *, now: int) -> G
     )
 
 
-def _watch_dimensions(width: int) -> tuple[int, int, int, int]:
+def _watch_rows(commits: list[RecentCommit], now: int, width: int) -> list[Text]:
     age_width, sha_width = 7, 7
     branch_width = min(38, max(16, (width - 18) // 3))
     summary_width = max(12, width - age_width - sha_width - branch_width - 3)
-    return age_width, sha_width, branch_width, summary_width
-
-
-def _watch_rows(commits: list[RecentCommit], now: int, width: int) -> list[Text]:
-    age_width, sha_width, branch_width, summary_width = _watch_dimensions(width)
     rows: list[Text] = []
     for commit in commits:
         row = Text()
@@ -167,7 +170,9 @@ def _watch_rows(commits: list[RecentCommit], now: int, width: int) -> list[Text]
 
 
 def _watch_header(width: int) -> Text:
-    age_width, sha_width, branch_width, summary_width = _watch_dimensions(width)
+    age_width, sha_width = 7, 7
+    branch_width = min(38, max(16, (width - 18) // 3))
+    summary_width = max(12, width - age_width - sha_width - branch_width - 3)
     return Text.assemble(
         (_fit("Age", age_width, right=True), "bold"),
         " ",
@@ -240,6 +245,43 @@ def _watch_layout(
     return layout
 
 
+def _start_scan(
+    path: Path, *, limit: int, include_remotes: bool, scan: ScanStatus
+) -> bool:
+    if scan.thread is not None:
+        return False
+    scan.result = None
+    scan.error = None
+    scan.include_remotes = include_remotes
+
+    def run() -> None:
+        try:
+            scan.result = collect_recent_commits(
+                path, limit=limit, include_remotes=include_remotes
+            )
+        except BaseException as exc:
+            scan.error = exc
+
+    scan.thread = threading.Thread(target=run, daemon=True)
+    scan.thread.start()
+    return True
+
+
+def _poll_scan(scan: ScanStatus) -> tuple[Path, list[RecentCommit]] | None:
+    thread = scan.thread
+    if thread is None or thread.is_alive():
+        return None
+    thread.join()
+    scan.thread = None
+    if scan.error is not None:
+        error = scan.error
+        scan.error = None
+        raise error
+    result = scan.result
+    scan.result = None
+    return result
+
+
 def _fetch_once(root: Path) -> None:
     fetch = FetchStatus()
     _start_fetch(root, fetch)
@@ -291,9 +333,7 @@ def print_recent_commits(
         else commits
     )
 
-    executor = ThreadPoolExecutor(max_workers=1)
-    future: Future[tuple[Path, list[RecentCommit]]] | None = None
-    future_remotes = False
+    scan = ScanStatus()
     remote_scan_pending = False
     selected = 0
     last_fetch = time.monotonic()
@@ -321,7 +361,7 @@ def print_recent_commits(
             remotes_loaded=remotes_loaded,
             interval=interval,
             fetch=fetch,
-            refreshing=future is not None,
+            refreshing=scan.thread is not None,
         )
 
     with _watch_terminal(console) as fd:
@@ -353,10 +393,11 @@ def print_recent_commits(
                             remote_scan_pending = True
                         live.update(render(), refresh=True)
 
-                    if future is not None and future.done():
-                        _, scanned = future.result()
-                        future = None
-                        if future_remotes:
+                    scan_kind = scan.include_remotes
+                    scan_result = _poll_scan(scan)
+                    if scan_result is not None:
+                        _, scanned = scan_result
+                        if scan_kind:
                             local_shas = {c.sha for c in local_commits}
                             remote_snapshot = [
                                 c for c in scanned if c.sha not in local_shas
@@ -387,31 +428,32 @@ def print_recent_commits(
                             live.update(render(), refresh=True)
                         continue
 
-                    if remote_scan_pending and fetch.process is None and future is None:
-                        future_remotes = True
-                        future = executor.submit(
-                            collect_recent_commits,
+                    if (
+                        remote_scan_pending
+                        and fetch.process is None
+                        and scan.thread is None
+                    ):
+                        _start_scan(
                             path,
                             limit=limit,
                             include_remotes=True,
+                            scan=scan,
                         )
                         live.update(render(), refresh=True)
                         continue
 
                     if (
-                        future is None
+                        scan.thread is None
                         and not remote_scan_pending
                         and now >= next_refresh
                     ):
-                        future_remotes = False
-                        future = executor.submit(
-                            collect_recent_commits,
+                        _start_scan(
                             path,
                             limit=limit,
                             include_remotes=False,
+                            scan=scan,
                         )
                         next_refresh = now + _REFRESH_SECONDS
                         continue
             finally:
                 _stop_fetch(fetch)
-                executor.shutdown(wait=False, cancel_futures=True)
