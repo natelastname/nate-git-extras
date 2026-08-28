@@ -99,6 +99,8 @@ def branches(
     /,
     *,
     fetch: bool = False,
+    pager: bool = True,
+    color: bool = True,
 ) -> None:
     """List local and remote branches without exposing Git ref internals.
 
@@ -108,5 +110,9 @@ def branches(
         Path inside the repository to inspect.
     fetch:
         Fetch and prune all remotes before listing branches.
+    pager:
+        Page output when it is taller than the terminal.
+    color:
+        Colorize branch roles and tracking status when output is a terminal.
     """
-    print_branches(path, fetch=fetch)
+    print_branches(path, fetch=fetch, pager=pager, color=color)
