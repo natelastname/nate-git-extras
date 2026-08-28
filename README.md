@@ -21,6 +21,7 @@ The current subcommands are:
 - `cp`: copy files or directories while respecting Git ignore rules
 - `ls`: print a tree-style directory listing
 - `status`: show a branch merge/cleanup dashboard
+- `recent`: show a most-recent-commits feed
 
 ### Copy
 
@@ -117,6 +118,36 @@ the terminal and occupies the screen without scrolling your shell history. The
 summary line is pinned to the bottom of the screen. Press `q` or `Ctrl-C` to exit and
 return to the previous terminal contents.
 
+### Recent commits
+
+```bash
+# Show the 20 most recent commits reachable from local branches
+uv run nate-git-extras recent
+
+# Change the feed length
+uv run nate-git-extras recent --limit 50
+
+# Fetch once, then include commits visible only on remote refs
+uv run nate-git-extras recent --fetch
+
+# Use the full-screen auto-updating feed
+uv run nate-git-extras recent --watch
+
+# Fetch and refresh the remote commit snapshot every 30 seconds
+uv run nate-git-extras recent --watch --interval 30
+```
+
+`recent` displays commit age, seven-character hash, a representative branch, and the
+commit summary. Commits reachable from multiple branches are shown once. Branch
+attribution prefers a local containing branch and falls back to a remote branch; the
+closest containing ref is used by Git's name-resolution logic.
+
+Watch mode follows the same remote policy as the branch dashboard: local commits
+refresh automatically, `g` fetches and refreshes remote-only commits once, and
+`--interval N` enables periodic fetching. `--fetch` seeds the initial remote snapshot
+before either static or watch output. Up/down arrows move the selected row and `q` or
+`Ctrl-C` exits the alternate-screen dashboard.
+
 Cyclopts provides command-specific help:
 
 ```bash
@@ -124,6 +155,7 @@ uv run nate-git-extras --help
 uv run nate-git-extras cp --help
 uv run nate-git-extras ls --help
 uv run nate-git-extras status --help
+uv run nate-git-extras recent --help
 ```
 
 ## Tests
