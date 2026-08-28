@@ -14,6 +14,7 @@ from rich.console import Console
 from .cp import git_cp_many, git_cp_template
 from .git_utils import find_git_root
 from .ls import print_tree
+from .recent import print_recent_commits
 from .status import (
     FetchStatus,
     _poll_fetch,
@@ -169,4 +170,40 @@ def status(
         stale_days=stale_days,
         watch=watch,
         interval=interval,
+    )
+
+
+@app.command
+def recent(
+    path: Path = Path("."),
+    /,
+    *,
+    limit: int = 20,
+    watch: bool = False,
+    interval: float | None = None,
+    fetch: bool = False,
+) -> None:
+    """Show a feed of the most recent commits across branches.
+
+    Parameters
+    ----------
+    path:
+        Repository path.
+    limit:
+        Maximum number of commits to display.
+    watch:
+        Continuously refresh until q or Ctrl-C. Use arrows to select and g to
+        fetch/display remote commits.
+    interval:
+        In watch mode, automatically fetch remotes every this many seconds.
+    fetch:
+        Fetch remotes once before the first snapshot. In watch mode this seeds
+        the initial remote snapshot without enabling periodic fetching.
+    """
+    print_recent_commits(
+        path,
+        limit=limit,
+        watch=watch,
+        interval=interval,
+        fetch_first=fetch,
     )
