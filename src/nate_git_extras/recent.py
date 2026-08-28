@@ -40,7 +40,9 @@ class RecentCommit:
     remote: bool = False
 
 
-def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _git(
+    root: Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "-C", str(root), *args],
         check=False,
@@ -53,7 +55,9 @@ def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
     return result
 
 
-def _log(root: Path, *, include_remotes: bool, limit: int) -> list[tuple[str, int, str]]:
+def _log(
+    root: Path, *, include_remotes: bool, limit: int
+) -> list[tuple[str, int, str]]:
     args = [
         "log",
         "--branches",
@@ -109,7 +113,8 @@ def collect_recent_commits(
         raise SystemExit(f"not inside a Git repository: {path}")
 
     commits: list[RecentCommit] = []
-    for sha, timestamp, summary in _log(root, include_remotes=include_remotes, limit=limit):
+    log = _log(root, include_remotes=include_remotes, limit=limit)
+    for sha, timestamp, summary in log:
         branch, remote = _branch_for(root, sha, include_remotes=include_remotes)
         commits.append(RecentCommit(sha, timestamp, branch, summary, remote))
     return root, commits
@@ -151,7 +156,10 @@ def _watch_rows(commits: list[RecentCommit], now: int, width: int) -> list[Text]
         row.append(" ")
         row.append(_fit(commit.sha[:7], sha_width), style="bold cyan")
         row.append(" ")
-        row.append(_fit(commit.branch, branch_width), style="cyan" if commit.remote else "")
+        row.append(
+            _fit(commit.branch, branch_width),
+            style="cyan" if commit.remote else "",
+        )
         row.append(" ")
         row.append(_fit(commit.summary, summary_width))
         rows.append(row)
@@ -177,7 +185,8 @@ def _fetch_text(fetch: FetchStatus) -> Text | None:
     if fetch.state == "failed":
         return Text(f"fetch failed: {fetch.detail}", style="bold red")
     if fetch.state == "ok" and fetch.finished_at is not None:
-        return Text(f"fetch ok {_age(int(time.time() - fetch.finished_at))} ago", style="green")
+        age = _age(int(time.time() - fetch.finished_at))
+        return Text(f"fetch ok {age} ago", style="green")
     return None
 
 
@@ -195,7 +204,11 @@ def _watch_layout(
     refreshing: bool,
 ) -> Layout:
     limit = max(1, height - 3)
-    start = 0 if len(rows) <= limit else max(0, min(selected - limit // 2, len(rows) - limit))
+    start = (
+        0
+        if len(rows) <= limit
+        else max(0, min(selected - limit // 2, len(rows) - limit))
+    )
     visible: list[Text] = []
     for index in range(start, min(start + limit, len(rows))):
         row = rows[index]
@@ -258,7 +271,9 @@ def print_recent_commits(
     if fetch_first:
         _fetch_once(root)
 
-    root, commits = collect_recent_commits(path, limit=limit, include_remotes=include_remotes)
+    root, commits = collect_recent_commits(
+        path, limit=limit, include_remotes=include_remotes
+    )
     console = Console()
     if not watch:
         console.print(_static_dashboard(root, commits, now=int(time.time())))
@@ -270,7 +285,11 @@ def print_recent_commits(
     if remotes_loaded:
         local_shas = {c.sha for c in collect_recent_commits(path, limit=limit)[1]}
         remote_snapshot = [c for c in commits if c.sha not in local_shas]
-    local_commits = collect_recent_commits(path, limit=limit)[1] if remotes_loaded else commits
+    local_commits = (
+        collect_recent_commits(path, limit=limit)[1]
+        if remotes_loaded
+        else commits
+    )
 
     executor = ThreadPoolExecutor(max_workers=1)
     future: Future[tuple[Path, list[RecentCommit]]] | None = None
@@ -314,7 +333,11 @@ def print_recent_commits(
                         return
                     if key in {"up", "down"}:
                         delta = -1 if key == "up" else 1
-                        selected = max(0, min(len(commits) - 1, selected + delta)) if commits else 0
+                        selected = (
+                            max(0, min(len(commits) - 1, selected + delta))
+                            if commits
+                            else 0
+                        )
                         live.update(render(), refresh=True)
                         continue
                     if key == "g":
@@ -335,20 +358,30 @@ def print_recent_commits(
                         future = None
                         if future_remotes:
                             local_shas = {c.sha for c in local_commits}
-                            remote_snapshot = [c for c in scanned if c.sha not in local_shas]
+                            remote_snapshot = [
+                                c for c in scanned if c.sha not in local_shas
+                            ]
                             remotes_loaded = True
                             remote_scan_pending = False
                         else:
                             local_commits = scanned
                         selected_sha = commits[selected].sha if commits else None
                         commits = rebuild()
-                        selected = next((i for i, c in enumerate(commits) if c.sha == selected_sha), 0)
+                        selected = next(
+                            (i for i, c in enumerate(commits) if c.sha == selected_sha),
+                            0,
+                        )
                         rows = _watch_rows(commits, int(time.time()), console.width)
                         live.update(render(), refresh=True)
                         next_refresh = now + _REFRESH_SECONDS
                         continue
 
-                    if interval is not None and fetch.process is None and not remote_scan_pending and now - last_fetch >= interval:
+                    if (
+                        interval is not None
+                        and fetch.process is None
+                        and not remote_scan_pending
+                        and now - last_fetch >= interval
+                    ):
                         if _start_fetch(root, fetch):
                             last_fetch = now
                             live.update(render(), refresh=True)
@@ -356,13 +389,27 @@ def print_recent_commits(
 
                     if remote_scan_pending and fetch.process is None and future is None:
                         future_remotes = True
-                        future = executor.submit(collect_recent_commits, path, limit=limit, include_remotes=True)
+                        future = executor.submit(
+                            collect_recent_commits,
+                            path,
+                            limit=limit,
+                            include_remotes=True,
+                        )
                         live.update(render(), refresh=True)
                         continue
 
-                    if future is None and not remote_scan_pending and now >= next_refresh:
+                    if (
+                        future is None
+                        and not remote_scan_pending
+                        and now >= next_refresh
+                    ):
                         future_remotes = False
-                        future = executor.submit(collect_recent_commits, path, limit=limit, include_remotes=False)
+                        future = executor.submit(
+                            collect_recent_commits,
+                            path,
+                            limit=limit,
+                            include_remotes=False,
+                        )
                         next_refresh = now + _REFRESH_SECONDS
                         continue
             finally:
