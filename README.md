@@ -20,6 +20,7 @@ The current subcommands are:
 
 - `cp`: copy files or directories while respecting Git ignore rules
 - `ls`: print a tree-style directory listing
+- `branches`: list local and remote branches grouped by where they exist
 
 ### Copy
 
@@ -50,12 +51,38 @@ uv run nate-git-extras ls --include-ignored
 uv run nate-git-extras ls --traverse-ignored
 ```
 
+### Branches
+
+```bash
+# Show local branches, remote branches, and each remote's default branch
+uv run nate-git-extras branches
+
+# Refresh remote-tracking refs first
+uv run nate-git-extras branches --fetch
+```
+
+Example output:
+
+```text
+Local branches
+  * master -> origin/master
+    feature/local
+
+Remote branches
+    origin/master       [tracked by master]
+    origin/remote-only  [remote only]
+
+Remote defaults
+    origin/HEAD -> origin/master
+```
+
 Cyclopts provides command-specific help:
 
 ```bash
 uv run nate-git-extras --help
 uv run nate-git-extras cp --help
 uv run nate-git-extras ls --help
+uv run nate-git-extras branches --help
 ```
 
 ## Tests
