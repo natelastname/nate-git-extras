@@ -22,6 +22,7 @@ The current subcommands are:
 - `ls`: print a tree-style directory listing
 - `status`: show a branch merge/cleanup dashboard
 - `recent`: show a most-recent-commits feed
+- `show`: inspect one commit in detail
 
 ### Copy
 
@@ -138,15 +139,38 @@ uv run nate-git-extras recent --watch --interval 30
 ```
 
 `recent` displays commit age, seven-character hash, a representative branch, and the
-commit summary. Commits reachable from multiple branches are shown once. Branch
-attribution prefers a local containing branch and falls back to a remote branch; the
-closest containing ref is used by Git's name-resolution logic.
+commit summary. Commits reachable from multiple branches are shown once. Exact local
+branch tips are preferred for attribution; otherwise the feed uses the closest local
+containing ref and falls back to remote refs.
+
+In watch mode, press `Enter` on a commit to open its detail view. The detail view shows
+the commit hash, representative branch, age, author, parents, containing refs, relation
+to the base branch, full commit message, and first-parent file stats. Use up/down to
+select a file and `Enter` or `d` to open its patch. In the patch view, up/down scrolls.
+`Esc` or `q` goes back one level; `q` from the top-level feed exits.
+
+For merge commits, file stats and patches are shown relative to the commit's first
+parent. This answers "what did this commit add to the history it continued from?"
+without defaulting to a combined merge diff.
 
 Watch mode follows the same remote policy as the branch dashboard: local commits
 refresh automatically, `g` fetches and refreshes remote-only commits once, and
 `--interval N` enables periodic fetching. `--fetch` seeds the initial remote snapshot
-before either static or watch output. Up/down arrows move the selected row and `q` or
-`Ctrl-C` exits the alternate-screen dashboard.
+before either static or watch output.
+
+### Commit detail
+
+```bash
+# Inspect one commit without entering watch mode
+uv run nate-git-extras show a41dc92
+
+# Use a different repository or comparison base
+uv run nate-git-extras show a41dc92 /path/to/repo --base main
+```
+
+`show` uses the same detail model as the interactive `recent` drill-down. It reports
+whether the commit is contained in the chosen base and shows the commit message,
+parents, refs, and per-file first-parent stats.
 
 Cyclopts provides command-specific help:
 
@@ -156,6 +180,7 @@ uv run nate-git-extras cp --help
 uv run nate-git-extras ls --help
 uv run nate-git-extras status --help
 uv run nate-git-extras recent --help
+uv run nate-git-extras show --help
 ```
 
 ## Tests

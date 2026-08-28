@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import re
+import os
+import select
 import subprocess
 import threading
 import time
@@ -15,6 +16,14 @@ from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
+from .commit_detail import (
+    CommitDetail,
+    branch_for_commit,
+    collect_commit_detail,
+    commit_detail_layout,
+    commit_patch,
+    commit_patch_layout,
+)
 from .git_utils import find_git_root
 from .status import (
     FetchStatus,
@@ -23,7 +32,6 @@ from .status import (
     _poll_fetch,
     _start_fetch,
     _stop_fetch,
-    _watch_key,
     _watch_terminal,
 )
 
@@ -48,9 +56,7 @@ class ScanStatus:
     include_remotes: bool = False
 
 
-def _git(
-    root: Path, *args: str, check: bool = True
-) -> subprocess.CompletedProcess[str]:
+def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "-C", str(root), *args],
         check=False,
@@ -86,28 +92,6 @@ def _log(
     return commits[:limit]
 
 
-def _branch_for(root: Path, sha: str, *, include_remotes: bool) -> tuple[str, bool]:
-    for pattern, remote in [("refs/heads/*", False), ("refs/remotes/*", True)]:
-        if remote and not include_remotes:
-            break
-        result = _git(
-            root,
-            "name-rev",
-            "--name-only",
-            "--no-undefined",
-            f"--refs={pattern}",
-            sha,
-            check=False,
-        )
-        if result.returncode != 0:
-            continue
-        name = re.split(r"[~^]", result.stdout.strip(), maxsplit=1)[0]
-        if remote:
-            name = name.removeprefix("remotes/")
-        return name, remote
-    return "—", False
-
-
 def collect_recent_commits(
     path: Path,
     *,
@@ -121,9 +105,12 @@ def collect_recent_commits(
         raise SystemExit(f"not inside a Git repository: {path}")
 
     commits: list[RecentCommit] = []
-    log = _log(root, include_remotes=include_remotes, limit=limit)
-    for sha, timestamp, summary in log:
-        branch, remote = _branch_for(root, sha, include_remotes=include_remotes)
+    for sha, timestamp, summary in _log(
+        root, include_remotes=include_remotes, limit=limit
+    ):
+        branch, remote = branch_for_commit(
+            root, sha, include_remotes=include_remotes
+        )
         commits.append(RecentCommit(sha, timestamp, branch, summary, remote))
     return root, commits
 
@@ -142,7 +129,11 @@ def _static_dashboard(root: Path, commits: list[RecentCommit], *, now: int) -> G
             commit.summary,
         )
     return Group(
-        Text.assemble(("Recent commits", "bold"), ("  ", "dim"), (str(root), "dim")),
+        Text.assemble(
+            ("Recent commits", "bold"),
+            ("  ", "dim"),
+            (str(root), "dim"),
+        ),
         table,
         Text(f"showing {len(commits)} commits", style="dim"),
     )
@@ -195,7 +186,7 @@ def _fetch_text(fetch: FetchStatus) -> Text | None:
     return None
 
 
-def _watch_layout(
+def _feed_layout(
     root: Path,
     rows: list[Text],
     *,
@@ -222,8 +213,15 @@ def _watch_layout(
             row.stylize("reverse")
         visible.append(row)
 
-    title = Text.assemble(("Recent commits", "bold"), ("  ", "dim"), (str(root), "dim"))
-    title.append("  ↑/↓ select · g fetch remotes · q / Ctrl-C stop", style="dim")
+    title = Text.assemble(
+        ("Recent commits", "bold"),
+        ("  ", "dim"),
+        (str(root), "dim"),
+    )
+    title.append(
+        "  ↑/↓ select · Enter detail · g fetch remotes · q / Ctrl-C stop",
+        style="dim",
+    )
     if remotes_loaded:
         title.append(" · remote snapshot shown", style="cyan")
     if interval is not None:
@@ -246,7 +244,11 @@ def _watch_layout(
 
 
 def _start_scan(
-    path: Path, *, limit: int, include_remotes: bool, scan: ScanStatus
+    path: Path,
+    *,
+    limit: int,
+    include_remotes: bool,
+    scan: ScanStatus,
 ) -> bool:
     if scan.thread is not None:
         return False
@@ -257,7 +259,9 @@ def _start_scan(
     def run() -> None:
         try:
             scan.result = collect_recent_commits(
-                path, limit=limit, include_remotes=include_remotes
+                path,
+                limit=limit,
+                include_remotes=include_remotes,
             )
         except BaseException as exc:
             scan.error = exc
@@ -291,6 +295,32 @@ def _fetch_once(root: Path) -> None:
         raise SystemExit(f"fetch failed: {fetch.detail}")
 
 
+def _read_key(fd: int, timeout: float) -> str | None:
+    readable, _, _ = select.select([fd], [], [], timeout)
+    if not readable:
+        return None
+
+    first = os.read(fd, 1)
+    if first in {b"\r", b"\n"}:
+        return "enter"
+    if first != b"\x1b":
+        return first.decode(errors="ignore").lower()
+
+    sequence = first
+    for _ in range(2):
+        readable, _, _ = select.select([fd], [], [], 0.002)
+        if not readable:
+            break
+        sequence += os.read(fd, 1)
+    if sequence == b"\x1b":
+        return "esc"
+    if sequence in {b"\x1b[A", b"\x1bOA"}:
+        return "up"
+    if sequence in {b"\x1b[B", b"\x1bOB"}:
+        return "down"
+    return None
+
+
 def print_recent_commits(
     path: Path = Path("."),
     *,
@@ -298,6 +328,7 @@ def print_recent_commits(
     watch: bool = False,
     interval: float | None = None,
     fetch_first: bool = False,
+    base: str = "master",
 ) -> None:
     if limit <= 0:
         raise SystemExit("--limit must be positive")
@@ -314,7 +345,9 @@ def print_recent_commits(
         _fetch_once(root)
 
     root, commits = collect_recent_commits(
-        path, limit=limit, include_remotes=include_remotes
+        path,
+        limit=limit,
+        include_remotes=include_remotes,
     )
     console = Console()
     if not watch:
@@ -325,8 +358,13 @@ def print_recent_commits(
     remotes_loaded = include_remotes
     remote_snapshot: list[RecentCommit] = []
     if remotes_loaded:
-        local_shas = {c.sha for c in collect_recent_commits(path, limit=limit)[1]}
-        remote_snapshot = [c for c in commits if c.sha not in local_shas]
+        local_shas = {
+            commit.sha
+            for commit in collect_recent_commits(path, limit=limit)[1]
+        }
+        remote_snapshot = [
+            commit for commit in commits if commit.sha not in local_shas
+        ]
     local_commits = (
         collect_recent_commits(path, limit=limit)[1]
         if remotes_loaded
@@ -336,6 +374,11 @@ def print_recent_commits(
     scan = ScanStatus()
     remote_scan_pending = False
     selected = 0
+    view = "feed"
+    detail: CommitDetail | None = None
+    selected_file = 0
+    patch = ""
+    patch_offset = 0
     last_fetch = time.monotonic()
     next_refresh = time.monotonic() + _REFRESH_SECONDS
     if interval is not None and not fetch_first:
@@ -345,13 +388,34 @@ def print_recent_commits(
         by_sha = {commit.sha: commit for commit in remote_snapshot}
         for commit in local_commits:
             by_sha[commit.sha] = commit
-        return sorted(by_sha.values(), key=lambda c: (-c.timestamp, c.sha))[:limit]
+        return sorted(
+            by_sha.values(),
+            key=lambda commit: (-commit.timestamp, commit.sha),
+        )[:limit]
 
     commits = rebuild()
     rows = _watch_rows(commits, int(time.time()), console.width)
 
     def render() -> Layout:
-        return _watch_layout(
+        if view == "detail" and detail is not None:
+            return commit_detail_layout(
+                root,
+                detail,
+                selected_file=selected_file,
+                width=console.width,
+                height=console.height,
+            )
+        if view == "patch" and detail is not None and detail.files:
+            return commit_patch_layout(
+                root,
+                detail,
+                detail.files[selected_file],
+                patch,
+                offset=patch_offset,
+                width=console.width,
+                height=console.height,
+            )
+        return _feed_layout(
             root,
             rows,
             total=len(commits),
@@ -365,26 +429,103 @@ def print_recent_commits(
         )
 
     with _watch_terminal(console) as fd:
-        with Live(render(), console=console, screen=True, auto_refresh=False) as live:
+        with Live(
+            render(),
+            console=console,
+            screen=True,
+            auto_refresh=False,
+        ) as live:
             try:
                 while True:
-                    key = _watch_key(fd, _POLL_SECONDS)
-                    if key == "q":
-                        return
-                    if key in {"up", "down"}:
-                        delta = -1 if key == "up" else 1
-                        selected = (
-                            max(0, min(len(commits) - 1, selected + delta))
-                            if commits
-                            else 0
-                        )
-                        live.update(render(), refresh=True)
-                        continue
-                    if key == "g":
-                        if _start_fetch(root, fetch):
-                            last_fetch = time.monotonic()
-                        live.update(render(), refresh=True)
-                        continue
+                    key = _read_key(fd, _POLL_SECONDS)
+
+                    if view == "patch":
+                        if key in {"q", "esc"}:
+                            view = "detail"
+                            live.update(render(), refresh=True)
+                            continue
+                        if key in {"up", "down"}:
+                            patch_lines = patch.splitlines() or [""]
+                            patch_limit = max(1, console.height - 2)
+                            max_offset = max(0, len(patch_lines) - patch_limit)
+                            patch_offset = max(
+                                0,
+                                min(
+                                    max_offset,
+                                    patch_offset + (-1 if key == "up" else 1),
+                                ),
+                            )
+                            live.update(render(), refresh=True)
+                            continue
+                    elif view == "detail":
+                        if key in {"q", "esc"}:
+                            view = "feed"
+                            detail = None
+                            next_refresh = 0
+                            live.update(render(), refresh=True)
+                            continue
+                        if key in {"up", "down"} and detail is not None:
+                            delta = -1 if key == "up" else 1
+                            selected_file = (
+                                max(
+                                    0,
+                                    min(
+                                        len(detail.files) - 1,
+                                        selected_file + delta,
+                                    ),
+                                )
+                                if detail.files
+                                else 0
+                            )
+                            live.update(render(), refresh=True)
+                            continue
+                        if (
+                            key in {"enter", "d"}
+                            and detail is not None
+                            and detail.files
+                        ):
+                            patch = commit_patch(
+                                root,
+                                detail,
+                                detail.files[selected_file],
+                            )
+                            patch_offset = 0
+                            view = "patch"
+                            live.update(render(), refresh=True)
+                            continue
+                    else:
+                        if key == "q":
+                            return
+                        if key in {"up", "down"}:
+                            delta = -1 if key == "up" else 1
+                            selected = (
+                                max(
+                                    0,
+                                    min(
+                                        len(commits) - 1,
+                                        selected + delta,
+                                    ),
+                                )
+                                if commits
+                                else 0
+                            )
+                            live.update(render(), refresh=True)
+                            continue
+                        if key == "enter" and commits:
+                            _, detail = collect_commit_detail(
+                                path,
+                                commits[selected].sha,
+                                base=base,
+                            )
+                            selected_file = 0
+                            view = "detail"
+                            live.update(render(), refresh=True)
+                            continue
+                        if key == "g":
+                            if _start_fetch(root, fetch):
+                                last_fetch = time.monotonic()
+                            live.update(render(), refresh=True)
+                            continue
 
                     now = time.monotonic()
                     if _poll_fetch(fetch):
@@ -398,23 +539,41 @@ def print_recent_commits(
                     if scan_result is not None:
                         _, scanned = scan_result
                         if scan_kind:
-                            local_shas = {c.sha for c in local_commits}
+                            local_shas = {
+                                commit.sha for commit in local_commits
+                            }
                             remote_snapshot = [
-                                c for c in scanned if c.sha not in local_shas
+                                commit
+                                for commit in scanned
+                                if commit.sha not in local_shas
                             ]
                             remotes_loaded = True
                             remote_scan_pending = False
                         else:
                             local_commits = scanned
-                        selected_sha = commits[selected].sha if commits else None
+                        selected_sha = (
+                            commits[selected].sha if commits else None
+                        )
                         commits = rebuild()
                         selected = next(
-                            (i for i, c in enumerate(commits) if c.sha == selected_sha),
+                            (
+                                index
+                                for index, commit in enumerate(commits)
+                                if commit.sha == selected_sha
+                            ),
                             0,
                         )
-                        rows = _watch_rows(commits, int(time.time()), console.width)
-                        live.update(render(), refresh=True)
+                        rows = _watch_rows(
+                            commits,
+                            int(time.time()),
+                            console.width,
+                        )
+                        if view == "feed":
+                            live.update(render(), refresh=True)
                         next_refresh = now + _REFRESH_SECONDS
+                        continue
+
+                    if view != "feed":
                         continue
 
                     if (
