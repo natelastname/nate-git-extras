@@ -1,7 +1,17 @@
+import io
 from pathlib import Path
 import subprocess
 
-from nate_git_extras.branches import collect_branches, format_branches
+from rich.console import Console
+
+from nate_git_extras.branches import (
+    BranchListing,
+    LocalBranch,
+    _should_page,
+    collect_branches,
+    format_branches,
+    render_branches,
+)
 
 
 def run_git(repo: Path, *args: str) -> None:
@@ -66,3 +76,58 @@ def test_branch_listing_distinguishes_untracked_same_name_local_branch(
     output = format_branches(collect_branches(repo))
 
     assert "origin/topic  [local topic; not tracking]" in output
+
+
+def test_colored_render_preserves_plain_output(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    run_git(repo, "remote", "add", "origin", "https://example.invalid/repo.git")
+    run_git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    run_git(repo, "update-ref", "refs/remotes/origin/remote-only", "HEAD")
+    run_git(repo, "branch", "--set-upstream-to=origin/master", "master")
+
+    listing = collect_branches(repo)
+    rendered = render_branches(listing)
+    styles = {str(span.style) for span in rendered.spans}
+
+    assert rendered.plain == format_branches(listing)
+    assert "bold green" in styles
+    assert "magenta" in styles
+    assert "yellow" in styles
+
+
+def test_branch_listing_pages_only_when_output_exceeds_terminal_height() -> None:
+    listing = BranchListing(
+        local=tuple(
+            LocalBranch(name=f"feature/{index}", current=index == 0, upstream=None)
+            for index in range(10)
+        ),
+        remote=(),
+        remote_defaults=(),
+    )
+    output = render_branches(listing)
+
+    tall_terminal = Console(
+        file=io.StringIO(),
+        force_terminal=True,
+        width=80,
+        height=40,
+    )
+    short_terminal = Console(
+        file=io.StringIO(),
+        force_terminal=True,
+        width=80,
+        height=6,
+    )
+    pipe = Console(
+        file=io.StringIO(),
+        force_terminal=False,
+        width=80,
+        height=6,
+    )
+
+    assert not _should_page(tall_terminal, output)
+    assert _should_page(short_terminal, output)
+    assert not _should_page(pipe, output)
