@@ -165,6 +165,9 @@ before either static or watch output.
 # Watch cached commits reachable from origin
 uv run nate-git-extras watch origin
 
+# Start with the cursor pinned to the newest commit
+uv run nate-git-extras watch origin --follow
+
 # Watch another repository
 uv run nate-git-extras watch origin /path/to/repo
 
@@ -185,6 +188,11 @@ Without `--interval`, `watch` never fetches automatically. Press `g` to run one
 `git fetch REMOTE --prune` and refresh the feed. Passing `--interval N` fetches that
 remote immediately and then every N seconds. Cached remote refs are rescanned in the
 background so another process updating them is also reflected without blocking the UI.
+
+Press `f` to toggle follow-newest mode. While enabled, the cursor remains on the first
+row as new commits arrive. Pressing either arrow key leaves follow mode immediately so
+manual navigation never fights the cursor; pressing `f` again jumps to the newest row
+and resumes following. `--follow` starts with this mode enabled.
 
 Use up/down to select a commit and `Enter` to open the same per-commit detail and file
 patch views used by `recent --watch`. `Esc` or `q` goes back one level; `q` from the

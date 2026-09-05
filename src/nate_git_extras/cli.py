@@ -226,6 +226,7 @@ def watch(
     limit: int = 50,
     interval: float | None = None,
     base: str = "master",
+    follow: bool = False,
 ) -> None:
     """Watch a reverse-chronological commit feed from one remote.
 
@@ -241,6 +242,8 @@ def watch(
         Fetch this remote automatically every this many seconds.
     base:
         Base ref used by the per-commit detail view.
+    follow:
+        Start with the cursor pinned to the newest commit. Press f to toggle.
     """
     watch_remote(
         remote,
@@ -248,6 +251,7 @@ def watch(
         limit=limit,
         interval=interval,
         base=base,
+        follow=follow,
     )
 
 

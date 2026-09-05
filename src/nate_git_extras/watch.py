@@ -210,6 +210,7 @@ def _feed_layout(
     interval: float | None,
     fetch: FetchStatus,
     refreshing: bool,
+    following: bool,
 ) -> Layout:
     limit = max(1, height - 3)
     start = (
@@ -232,13 +233,15 @@ def _feed_layout(
         (str(root), "dim"),
     )
     title.append(
-        "  ↑/↓ select · Enter detail · g fetch · q / Ctrl-C stop",
+        "  ↑/↓ select · f follow newest · Enter detail · g fetch · q / Ctrl-C stop",
         style="dim",
     )
     if interval is not None:
         title.append(f" · fetch every {interval:g}s", style="dim")
 
     footer = Text(f"{total} commits", style="dim")
+    if following:
+        footer.append(" · following newest", style="bold cyan")
     if refreshing:
         footer.append(" · refreshing…", style="dim yellow")
     fetch_text = _fetch_text(fetch)
@@ -261,6 +264,7 @@ def watch_remote(
     limit: int = 50,
     interval: float | None = None,
     base: str = "master",
+    follow: bool = False,
 ) -> None:
     """Watch commits reachable from a single remote's tracking refs."""
     if limit <= 0:
@@ -273,6 +277,7 @@ def watch_remote(
     fetch = FetchStatus()
     scan = ScanStatus()
     selected = 0
+    following = follow
     view = "feed"
     detail: CommitDetail | None = None
     selected_file = 0
@@ -314,6 +319,7 @@ def watch_remote(
             interval=interval,
             fetch=fetch,
             refreshing=scan.thread is not None,
+            following=following,
         )
 
     with _watch_terminal(console) as fd:
@@ -379,12 +385,19 @@ def watch_remote(
                         if key == "q":
                             return
                         if key in {"up", "down"}:
+                            following = False
                             delta = -1 if key == "up" else 1
                             selected = (
                                 max(0, min(len(commits) - 1, selected + delta))
                                 if commits
                                 else 0
                             )
+                            live.update(render(), refresh=True)
+                            continue
+                        if key == "f":
+                            following = not following
+                            if following:
+                                selected = 0
                             live.update(render(), refresh=True)
                             continue
                         if key == "enter" and commits:
@@ -415,13 +428,17 @@ def watch_remote(
                         root, scanned = scan_result
                         selected_sha = commits[selected].sha if commits else None
                         commits = scanned
-                        selected = next(
-                            (
-                                index
-                                for index, commit in enumerate(commits)
-                                if commit.sha == selected_sha
-                            ),
-                            0,
+                        selected = (
+                            0
+                            if following
+                            else next(
+                                (
+                                    index
+                                    for index, commit in enumerate(commits)
+                                    if commit.sha == selected_sha
+                                ),
+                                0,
+                            )
                         )
                         rows = _watch_rows(commits, int(time.time()), console.width)
                         live.update(render(), refresh=True)
