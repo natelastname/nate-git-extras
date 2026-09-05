@@ -22,6 +22,7 @@ The current subcommands are:
 - `ls`: print a tree-style directory listing
 - `status`: show a branch merge/cleanup dashboard
 - `recent`: show a most-recent-commits feed
+- `watch`: watch a reverse-chronological commit feed from one remote
 - `show`: inspect one commit in detail
 
 ### Copy
@@ -158,6 +159,37 @@ refresh automatically, `g` fetches and refreshes remote-only commits once, and
 `--interval N` enables periodic fetching. `--fetch` seeds the initial remote snapshot
 before either static or watch output.
 
+### Watch a remote
+
+```bash
+# Watch cached commits reachable from origin
+uv run nate-git-extras watch origin
+
+# Watch another repository
+uv run nate-git-extras watch origin /path/to/repo
+
+# Keep the feed to the newest 100 commits
+uv run nate-git-extras watch origin --limit 100
+
+# Fetch origin every 30 seconds
+uv run nate-git-extras watch origin --interval 30
+```
+
+`watch REMOTE` is a remote-centric activity feed. Its universe is only commits
+reachable from `refs/remotes/REMOTE/*`; local branches are not mixed into the list.
+Rows are ordered newest-first by commit timestamp and show age, short hash, the
+representative branch on that remote, and the commit summary. The remote prefix is
+omitted from the Branch column because the header already identifies the remote.
+
+Without `--interval`, `watch` never fetches automatically. Press `g` to run one
+`git fetch REMOTE --prune` and refresh the feed. Passing `--interval N` fetches that
+remote immediately and then every N seconds. Cached remote refs are rescanned in the
+background so another process updating them is also reflected without blocking the UI.
+
+Use up/down to select a commit and `Enter` to open the same per-commit detail and file
+patch views used by `recent --watch`. `Esc` or `q` goes back one level; `q` from the
+feed exits.
+
 ### Commit detail
 
 ```bash
@@ -180,6 +212,7 @@ uv run nate-git-extras cp --help
 uv run nate-git-extras ls --help
 uv run nate-git-extras status --help
 uv run nate-git-extras recent --help
+uv run nate-git-extras watch --help
 uv run nate-git-extras show --help
 ```
 

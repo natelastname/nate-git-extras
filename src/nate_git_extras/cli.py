@@ -24,6 +24,7 @@ from .status import (
     collect_branch_status,
     print_branch_status,
 )
+from .watch import watch_remote
 
 app = App(
     name="nate-git-extras",
@@ -212,6 +213,40 @@ def recent(
         watch=watch,
         interval=interval,
         fetch_first=fetch,
+        base=base,
+    )
+
+
+@app.command
+def watch(
+    remote: str,
+    path: Path = Path("."),
+    /,
+    *,
+    limit: int = 50,
+    interval: float | None = None,
+    base: str = "master",
+) -> None:
+    """Watch a reverse-chronological commit feed from one remote.
+
+    Parameters
+    ----------
+    remote:
+        Git remote to watch, for example origin.
+    path:
+        Repository path.
+    limit:
+        Maximum number of commits to display.
+    interval:
+        Fetch this remote automatically every this many seconds.
+    base:
+        Base ref used by the per-commit detail view.
+    """
+    watch_remote(
+        remote,
+        path,
+        limit=limit,
+        interval=interval,
         base=base,
     )
 
